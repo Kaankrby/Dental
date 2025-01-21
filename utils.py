@@ -15,7 +15,7 @@ def performance_monitor(func):
         return result
     return wrapper
 
-@st.cache_resource
+@st.cache_resource(show_spinner=False)
 def load_mesh(stl_path: str) -> o3d.geometry.TriangleMesh:
     """
     Load and clean an STL mesh with improved error handling and validation.
@@ -36,17 +36,29 @@ def load_mesh(stl_path: str) -> o3d.geometry.TriangleMesh:
         max_size = 100 * 1024 * 1024  # 100MB limit
         if file_size > max_size:
             raise ValueError(f"File too large: {file_size/1024/1024:.1f}MB (max {max_size/1024/1024}MB)")
-            
-        mesh = o3d.io.read_triangle_mesh(stl_path)
         
-        # Validate mesh
+        # Load mesh with explicit options
+        mesh = o3d.io.read_triangle_mesh(
+            stl_path,
+            enable_post_processing=True,
+            print_progress=False
+        )
+        
         if not mesh.has_triangles():
             raise ValueError("Mesh has no triangles")
-            
-        # Clean mesh
+        
+        # Ensure mesh has vertex normals
+        if not mesh.has_vertex_normals():
+            mesh.compute_vertex_normals()
+        
+        # Clean mesh with explicit parameters
         mesh.remove_degenerate_triangles()
         mesh.remove_duplicated_triangles()
+        mesh.remove_duplicated_vertices()
         mesh.remove_non_manifold_edges()
+        
+        # Ensure mesh is properly oriented
+        mesh.orient_triangles()
         
         # Validate cleaned mesh
         if len(mesh.triangles) == 0:
