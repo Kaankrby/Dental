@@ -14,7 +14,7 @@ class STLAnalyzer:
         
     @performance_monitor
     def load_reference(self, file_path: str, num_points: int, nb_neighbors: int, std_ratio: float):
-        """Load and process reference STL file."""
+        """Load and process pre-cropped reference cavity model."""
         from utils import load_mesh, sample_point_cloud
         
         self.reference_mesh = load_mesh(file_path)
@@ -24,11 +24,12 @@ class STLAnalyzer:
             nb_neighbors,
             std_ratio
         )
+        # Get bounding box of the pre-cropped cavity region
         self.reference_bbox = self.reference_pcd.get_axis_aligned_bounding_box()
         
     @performance_monitor
     def add_test_file(self, file_path: str, num_points: int, nb_neighbors: int, std_ratio: float):
-        """Load and process a test STL file."""
+        """Load and process a student's test cavity model."""
         from utils import load_mesh, sample_point_cloud
         
         mesh = load_mesh(file_path)
@@ -112,12 +113,11 @@ class STLAnalyzer:
         use_global_reg: bool,
         voxel_size: float,
         icp_threshold: float,
-        max_iter: int,
-        ignore_outside_bbox: bool
+        max_iter: int
     ) -> Dict:
-        """Process a single test file and compute metrics."""
+        """Process a student's test file and compute cavity metrics."""
         if self.reference_pcd is None:
-            raise ValueError("Reference not loaded")
+            raise ValueError("Reference cavity model not loaded")
             
         test_data = self.test_meshes[file_path]
         test_pcd = test_data['pcd']
@@ -143,16 +143,14 @@ class STLAnalyzer:
         # Transform test point cloud
         test_aligned = test_pcd.transform(icp_result.transformation)
         
-        # Filter points if needed
-        if ignore_outside_bbox:
-            indices = self.reference_bbox.get_point_indices_within_bounding_box(
-                test_aligned.points
-            )
-            test_aligned = test_aligned.select_by_index(indices)
-            
-        # Compute metrics
-        from utils import compute_advanced_metrics
-        metrics = compute_advanced_metrics(test_aligned, self.reference_pcd)
+        # Compute cavity-specific metrics
+        from utils import compute_cavity_metrics
+        metrics = compute_cavity_metrics(
+            test_aligned,
+            self.reference_pcd,
+            self.reference_bbox
+        )
+        
         metrics.update({
             'fitness': icp_result.fitness,
             'inlier_rmse': icp_result.inlier_rmse,
