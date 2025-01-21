@@ -1,165 +1,111 @@
-import open3d as o3d
 import numpy as np
 import streamlit as st
 from typing import Tuple, Optional, Dict
-from utils import performance_monitor
+from utils import performance_monitor, process_mesh, compute_cavity_metrics
+from scipy.spatial.transform import Rotation
+from scipy.optimize import minimize
 
 class STLAnalyzer:
     def __init__(self):
-        self.reference_mesh = None
-        self.reference_pcd = None
+        self.reference_points = None
         self.reference_bbox = None
-        self.test_meshes = {}
+        self.test_points = {}
         self.results = {}
         
     @performance_monitor
     def load_reference(self, file_path: str, num_points: int, nb_neighbors: int, std_ratio: float):
         """Load and process pre-cropped reference cavity model."""
-        from utils import load_mesh, sample_point_cloud
-        
-        self.reference_mesh = load_mesh(file_path)
-        self.reference_pcd = sample_point_cloud(
-            self.reference_mesh,
+        self.reference_points, self.reference_bbox = process_mesh(
+            file_path,
             num_points,
             nb_neighbors,
             std_ratio
         )
-        # Get bounding box of the pre-cropped cavity region
-        self.reference_bbox = self.reference_pcd.get_axis_aligned_bounding_box()
         
     @performance_monitor
     def add_test_file(self, file_path: str, num_points: int, nb_neighbors: int, std_ratio: float):
         """Load and process a student's test cavity model."""
-        from utils import load_mesh, sample_point_cloud
+        points, _ = process_mesh(
+            file_path,
+            num_points,
+            nb_neighbors,
+            std_ratio
+        )
+        self.test_points[file_path] = points
         
-        mesh = load_mesh(file_path)
-        pcd = sample_point_cloud(mesh, num_points, nb_neighbors, std_ratio)
-        self.test_meshes[file_path] = {
-            'mesh': mesh,
-            'pcd': pcd
-        }
+    def icp_objective(self, params: np.ndarray, source: np.ndarray, target: np.ndarray) -> float:
+        """Objective function for ICP optimization."""
+        rotation = Rotation.from_euler('xyz', params[:3])
+        translation = params[3:]
         
+        # Apply transformation
+        transformed = rotation.apply(source) + translation
+        
+        # Compute distances to nearest neighbors
+        distances = np.min(np.linalg.norm(transformed[:, np.newaxis] - target, axis=2), axis=1)
+        return np.mean(distances)
+    
     @performance_monitor
-    def prepare_for_global_registration(
+    def align_point_clouds(
         self,
-        pcd: o3d.geometry.PointCloud,
-        voxel_size: float
-    ) -> Tuple[o3d.geometry.PointCloud, o3d.pipelines.registration.Feature]:
-        """Prepare point cloud for global registration."""
-        pcd_down = pcd.voxel_down_sample(voxel_size=voxel_size)
-        pcd_down.estimate_normals(
-            search_param=o3d.geometry.KDTreeSearchParamHybrid(
-                radius=2.0*voxel_size,
-                max_nn=30
-            )
-        )
-        fpfh = o3d.pipelines.registration.compute_fpfh_feature(
-            pcd_down,
-            o3d.geometry.KDTreeSearchParamHybrid(
-                radius=5.0*voxel_size,
-                max_nn=100
-            )
-        )
-        return pcd_down, fpfh
+        source: np.ndarray,
+        target: np.ndarray,
+        max_iterations: int = 100
+    ) -> Tuple[np.ndarray, float]:
+        """Align source points to target points using ICP."""
+        # Initial guess
+        params = np.zeros(6)  # [rx, ry, rz, tx, ty, tz]
         
-    @performance_monitor
-    def global_registration(
-        self,
-        source: o3d.geometry.PointCloud,
-        target: o3d.geometry.PointCloud,
-        voxel_size: float
-    ) -> np.ndarray:
-        """Perform global registration using RANSAC."""
-        source_down, source_fpfh = self.prepare_for_global_registration(source, voxel_size)
-        target_down, target_fpfh = self.prepare_for_global_registration(target, voxel_size)
-        
-        result = o3d.pipelines.registration.registration_ransac_based_on_feature_matching(
-            source_down, target_down,
-            source_fpfh, target_fpfh,
-            mutual_filter=True,
-            max_correspondence_distance=voxel_size * 1.5,
-            estimation_method=o3d.pipelines.registration.TransformationEstimationPointToPoint(False),
-            ransac_n=4,
-            checkers=[
-                o3d.pipelines.registration.CorrespondenceCheckerBasedOnEdgeLength(0.9),
-                o3d.pipelines.registration.CorrespondenceCheckerBasedOnDistance(voxel_size * 1.5)
-            ],
-            criteria=o3d.pipelines.registration.RANSACConvergenceCriteria(4000000, 500)
+        # Optimize transformation
+        result = minimize(
+            self.icp_objective,
+            params,
+            args=(source, target),
+            method='Nelder-Mead',
+            options={'maxiter': max_iterations}
         )
-        return result.transformation
         
-    @performance_monitor
-    def refine_registration(
-        self,
-        source: o3d.geometry.PointCloud,
-        target: o3d.geometry.PointCloud,
-        init_transform: np.ndarray,
-        threshold: float,
-        max_iter: int
-    ) -> o3d.pipelines.registration.RegistrationResult:
-        """Refine registration using ICP."""
-        result = o3d.pipelines.registration.registration_icp(
-            source, target,
-            threshold, init_transform,
-            o3d.pipelines.registration.TransformationEstimationPointToPoint(),
-            o3d.pipelines.registration.ICPConvergenceCriteria(max_iteration=max_iter)
-        )
-        return result
+        # Apply final transformation
+        rotation = Rotation.from_euler('xyz', result.x[:3])
+        translation = result.x[3:]
+        aligned_points = rotation.apply(source) + translation
+        
+        return aligned_points, result.fun
         
     @performance_monitor
     def process_test_file(
         self,
         file_path: str,
-        use_global_reg: bool,
-        voxel_size: float,
-        icp_threshold: float,
-        max_iter: int
+        icp_max_iter: int = 100
     ) -> Dict:
         """Process a student's test file and compute cavity metrics."""
-        if self.reference_pcd is None:
+        if self.reference_points is None:
             raise ValueError("Reference cavity model not loaded")
             
-        test_data = self.test_meshes[file_path]
-        test_pcd = test_data['pcd']
+        test_points = self.test_points[file_path]
         
-        # Initial alignment
-        transform_init = np.eye(4)
-        if use_global_reg:
-            transform_init = self.global_registration(
-                test_pcd,
-                self.reference_pcd,
-                voxel_size
-            )
-            
-        # ICP refinement
-        icp_result = self.refine_registration(
-            test_pcd,
-            self.reference_pcd,
-            transform_init,
-            icp_threshold,
-            max_iter
+        # Align points
+        aligned_points, rmse = self.align_point_clouds(
+            test_points,
+            self.reference_points,
+            max_iterations=icp_max_iter
         )
         
-        # Transform test point cloud
-        test_aligned = test_pcd.transform(icp_result.transformation)
-        
-        # Compute cavity-specific metrics
-        from utils import compute_cavity_metrics
+        # Compute metrics
         metrics = compute_cavity_metrics(
-            test_aligned,
-            self.reference_pcd,
+            aligned_points,
+            self.reference_points,
             self.reference_bbox
         )
         
+        # Add alignment quality metrics
         metrics.update({
-            'fitness': icp_result.fitness,
-            'inlier_rmse': icp_result.inlier_rmse,
-            'transformation': icp_result.transformation
+            'alignment_rmse': float(rmse)
         })
         
         self.results[file_path] = {
             'metrics': metrics,
-            'aligned_pcd': test_aligned
+            'aligned_points': aligned_points
         }
         
         return self.results[file_path]

@@ -1,5 +1,5 @@
 streamlit>=1.24.0
-open3d>=0.17.0
+trimesh>=3.9.0
 numpy>=1.24.0
 pandas>=2.0.0
 plotly>=5.14.0
