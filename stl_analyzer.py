@@ -9,130 +9,184 @@ import os
 # -------------------------------------------------
 # Streamlit Page Configuration
 # -------------------------------------------------
-st.set_page_config(page_title="Dental STL Analyzer", layout="wide")
-st.title("🦷 Dental STL Deviation Analyzer")
+st.set_page_config(page_title="Dental STL Analyzer (Global+ICP)", layout="wide")
+st.title("🦷 Dental STL Deviation Analyzer (Global Registration + ICP)")
 
 # -------------------------------------------------
 # Utility Functions
 # -------------------------------------------------
-def load_and_preprocess(
-    stl_path: str,
-    num_points: int = 2000,
-    nb_neighbors: int = 20,
-    std_ratio: float = 2.0
-) -> o3d.geometry.PointCloud:
+def load_mesh(stl_path: str) -> o3d.geometry.TriangleMesh:
     """
-    Load, clean, and downsample an STL mesh, then convert to a point cloud.
+    Load and clean an STL mesh.
     """
     mesh = o3d.io.read_triangle_mesh(stl_path)
     mesh.remove_degenerate_triangles()
     mesh.remove_duplicated_triangles()
     mesh.remove_non_manifold_edges()
-    
-    # Convert to point cloud (uniform sampling)
+    return mesh
+
+def sample_point_cloud(
+    mesh: o3d.geometry.TriangleMesh,
+    num_points: int,
+    nb_neighbors: int,
+    std_ratio: float
+) -> o3d.geometry.PointCloud:
+    """
+    Convert mesh to point cloud via uniform sampling, then remove outliers.
+    """
     pcd = mesh.sample_points_uniformly(number_of_points=num_points)
     
-    # Remove outliers from point cloud
-    cl, _ = pcd.remove_statistical_outlier(nb_neighbors=nb_neighbors, std_ratio=std_ratio)
-    
-    return cl
+    # Remove outliers
+    pcd_clean, _ = pcd.remove_statistical_outlier(
+        nb_neighbors=nb_neighbors, std_ratio=std_ratio
+    )
+    return pcd_clean
 
-def align_point_clouds(
+def prepare_for_global_registration(
+    pcd: o3d.geometry.PointCloud,
+    voxel_size: float
+) -> (o3d.geometry.PointCloud, o3d.pipelines.registration.Feature):
+    """
+    Downsample the point cloud, estimate normals, and compute FPFH features
+    to prepare for RANSAC-based global registration.
+    """
+    pcd_down = pcd.voxel_down_sample(voxel_size=voxel_size)
+    pcd_down.estimate_normals(
+        search_param=o3d.geometry.KDTreeSearchParamHybrid(radius=2.0*voxel_size, max_nn=30)
+    )
+    fpfh = o3d.pipelines.registration.compute_fpfh_feature(
+        pcd_down,
+        o3d.geometry.KDTreeSearchParamHybrid(radius=5.0*voxel_size, max_nn=100)
+    )
+    return pcd_down, fpfh
+
+def global_registration_ransac(
+    source_down: o3d.geometry.PointCloud,
+    target_down: o3d.geometry.PointCloud,
+    source_fpfh: o3d.pipelines.registration.Feature,
+    target_fpfh: o3d.pipelines.registration.Feature,
+    voxel_size: float
+) -> o3d.pipelines.registration.RegistrationResult:
+    """
+    Perform RANSAC-based global registration to get a coarse alignment.
+    """
+    distance_threshold = voxel_size * 1.5
+    
+    result = o3d.pipelines.registration.registration_ransac_based_on_feature_matching(
+        source_down,
+        target_down,
+        source_fpfh,
+        target_fpfh,
+        mutual_filter=True,
+        max_correspondence_distance=distance_threshold,
+        estimation_method=o3d.pipelines.registration.TransformationEstimationPointToPoint(False),
+        ransac_n=4,
+        checkers=[
+            o3d.pipelines.registration.CorrespondenceCheckerBasedOnEdgeLength(0.9),
+            o3d.pipelines.registration.CorrespondenceCheckerBasedOnDistance(distance_threshold)
+        ],
+        criteria=o3d.pipelines.registration.RANSACConvergenceCriteria(4000000, 500)
+    )
+    return result
+
+def refine_registration_icp(
     source: o3d.geometry.PointCloud,
     target: o3d.geometry.PointCloud,
-    voxel_size: float = 0.1,
-    threshold: float = 0.2,
-    max_iterations: int = 200
-) -> (o3d.geometry.PointCloud, o3d.pipelines.registration.RegistrationResult):
+    init_transform: np.ndarray,
+    icp_threshold: float,
+    max_iterations: int
+) -> o3d.pipelines.registration.RegistrationResult:
     """
-    Align two point clouds using ICP (point-to-point).
+    Refine alignment using ICP, starting from the given initial transform.
     """
-    source_down = source.voxel_down_sample(voxel_size=voxel_size)
-    target_down = target.voxel_down_sample(voxel_size=voxel_size)
-
-    trans_init = np.identity(4)
-    reg_result = o3d.pipelines.registration.registration_icp(
-        source_down, 
-        target_down, 
-        threshold, 
-        trans_init,
+    # Estimate normals (good practice for small voxel sizes or small objects)
+    source.estimate_normals()
+    target.estimate_normals()
+    
+    result_icp = o3d.pipelines.registration.registration_icp(
+        source,
+        target,
+        icp_threshold,
+        init_transform,
         o3d.pipelines.registration.TransformationEstimationPointToPoint(),
         o3d.pipelines.registration.ICPConvergenceCriteria(max_iteration=max_iterations)
     )
-    
-    # Transform the original source cloud with the resulting transform
-    source.transform(reg_result.transformation)
-    
-    return source, reg_result
+    return result_icp
 
-def calculate_deviations(
-    source: o3d.geometry.PointCloud,
+def transform_point_cloud(
+    pcd: o3d.geometry.PointCloud,
+    transformation: np.ndarray
+) -> o3d.geometry.PointCloud:
+    """
+    Return a copy of the point cloud transformed by the given 4x4 matrix.
+    """
+    pcd_copy = o3d.geometry.PointCloud(pcd)
+    pcd_copy.transform(transformation)
+    return pcd_copy
+
+def compute_deviations(
+    source_aligned: o3d.geometry.PointCloud,
     target: o3d.geometry.PointCloud
 ) -> np.ndarray:
     """
-    Calculate point-to-point distances from source to target.
+    Compute point-to-point distances from source to target.
     """
-    dists = source.compute_point_cloud_distance(target)
+    dists = source_aligned.compute_point_cloud_distance(target)
     return np.asarray(dists)
 
-def plotly_heatmap(
-    points: np.ndarray, 
-    deviations: np.ndarray,
-    point_size: int = 3,
-    color_scale: str = "Hot",
-    title: str = "Deviation Map"
+def plot_point_cloud_heatmap(
+    points: np.ndarray,
+    values: np.ndarray,
+    point_size: int,
+    color_scale: str,
+    title: str
 ) -> go.Figure:
     """
-    Create an interactive 3D heatmap using Plotly.
+    Plot a 3D scatter of points with scalar values as color.
     """
     fig = go.Figure()
-    
     fig.add_trace(
         go.Scatter3d(
-            x=points[:, 0],
-            y=points[:, 1],
-            z=points[:, 2],
+            x=points[:,0],
+            y=points[:,1],
+            z=points[:,2],
             mode='markers',
             marker=dict(
                 size=point_size,
-                color=deviations,
+                color=values,
                 colorscale=color_scale,
                 opacity=0.8,
                 colorbar=dict(title='Deviation (mm)')
             ),
-            name="Aligned Test"
+            name="Aligned Source"
         )
     )
-    
     fig.update_layout(
         title=title,
         scene=dict(
-            xaxis_title='X (mm)',
-            yaxis_title='Y (mm)',
-            zaxis_title='Z (mm)'
+            xaxis_title="X",
+            yaxis_title="Y",
+            zaxis_title="Z"
         ),
         margin=dict(l=0, r=0, b=0, t=35)
     )
     return fig
 
-def plot_point_clouds(
+def plot_multiple_point_clouds(
     pcd_data: list,
-    point_size: int = 3
+    point_size: int
 ) -> go.Figure:
     """
-    Plot multiple point clouds in a single 3D figure with different colors.
-    
-    :param pcd_data: List of tuples [(points, color, label), ...].
-    :param point_size: Marker size.
+    Plot multiple point clouds in one 3D figure, each with a distinct color or label.
+    :param pcd_data: List[ (points_ndarray, color_str, label_str) ]
     """
     fig = go.Figure()
-    
     for (points, color, label) in pcd_data:
         fig.add_trace(
             go.Scatter3d(
-                x=points[:, 0],
-                y=points[:, 1],
-                z=points[:, 2],
+                x=points[:,0],
+                y=points[:,1],
+                z=points[:,2],
                 mode='markers',
                 marker=dict(
                     size=point_size,
@@ -142,7 +196,6 @@ def plot_point_clouds(
                 name=label
             )
         )
-    
     fig.update_layout(
         scene=dict(
             xaxis_title="X",
@@ -154,17 +207,54 @@ def plot_point_clouds(
     return fig
 
 # -------------------------------------------------
-# Sidebar Controls with "help" Text
+# Sidebar with Parameters
 # -------------------------------------------------
-st.sidebar.header("Parameters")
+st.sidebar.header("Registration Parameters")
+
+use_global_registration = st.sidebar.checkbox(
+    "Use Global Registration (RANSAC)?",
+    value=True,
+    help="Enable a coarse alignment step using RANSAC & FPFH features. If unchecked, only ICP is used."
+)
+
+voxel_size_global = st.sidebar.slider(
+    "Global Reg. Voxel Size",
+    min_value=0.01,
+    max_value=2.0,
+    value=0.5,
+    step=0.01,
+    help="Downsampling voxel size for RANSAC feature extraction. For small dental models, ~0.2-0.5 might work."
+)
+
+st.sidebar.header("ICP Parameters")
+
+icp_threshold = st.sidebar.slider(
+    "ICP Threshold (mm)",
+    min_value=0.01,
+    max_value=2.0,
+    value=0.2,
+    step=0.01,
+    help="Max distance for ICP correspondences. Smaller for tiny dental models."
+)
+
+icp_max_iter = st.sidebar.slider(
+    "ICP Max Iterations",
+    min_value=50,
+    max_value=2000,
+    value=300,
+    step=50,
+    help="Higher iterations can improve accuracy but take longer."
+)
+
+st.sidebar.header("Point Cloud Sampling / Outlier Removal")
 
 num_points = st.sidebar.slider(
     "Points to Sample",
     min_value=500,
-    max_value=20000,
-    value=2000,
+    max_value=30000,
+    value=3000,
     step=500,
-    help="Number of points to uniformly sample from the STL mesh. Higher = more detail, but slower."
+    help="Number of points to uniformly sample from each mesh."
 )
 
 nb_neighbors = st.sidebar.slider(
@@ -172,7 +262,7 @@ nb_neighbors = st.sidebar.slider(
     min_value=5,
     max_value=50,
     value=20,
-    help="Number of neighbors to consider for outlier removal. Larger values can remove more noise, but might remove valid points."
+    help="Number of neighbors for statistical outlier removal."
 )
 
 std_ratio = st.sidebar.slider(
@@ -181,180 +271,167 @@ std_ratio = st.sidebar.slider(
     max_value=5.0,
     value=2.0,
     step=0.5,
-    help="Points outside this standard deviation ratio (in local neighborhoods) are removed as outliers."
+    help="Std ratio for outlier removal. Points beyond this are removed."
 )
 
-voxel_size = st.sidebar.slider(
-    "Downsample Voxel Size (ICP)",
-    min_value=0.01,
-    max_value=1.0,
-    value=0.1,
-    step=0.01,
-    help="Voxel size for downsampling during ICP. Helps reduce processing time and noise."
-)
-
-threshold = st.sidebar.slider(
-    "ICP Threshold (mm)",
-    min_value=0.01,
-    max_value=2.0,
-    value=0.2,
-    step=0.01,
-    help="Maximum distance (in mm) between corresponding points in ICP. For small dental models, use a smaller threshold."
-)
-
-max_iterations = st.sidebar.slider(
-    "ICP Max Iterations",
-    min_value=50,
-    max_value=1000,
-    value=200,
-    step=50,
-    help="Maximum number of ICP iterations. More iterations can refine alignment, but increase computation time."
-)
+st.sidebar.header("Visualization")
 
 point_size = st.sidebar.slider(
-    "3D Plot Point Size",
-    min_value=1,
-    max_value=10,
-    value=3,
-    help="Marker size for the 3D scatter plot."
+    "3D Point Size",
+    1, 10, 3,
+    help="Marker size in 3D plots."
 )
 
 color_scale = st.sidebar.selectbox(
     "Heatmap Color Scale",
     ["Hot", "Viridis", "Rainbow", "Blues", "Reds"],
-    help="Color mapping scheme for visualizing deviation values in the 3D scatter plot."
+    help="Color mapping for deviation values."
 )
 
-# Toggles to show reference/test raw point clouds
 show_ref_raw = st.sidebar.checkbox(
-    "Show Reference (raw)",
+    "Show Reference (raw)?",
     value=False,
-    help="Toggle to display the original (unaligned) reference point cloud in a separate 3D plot."
+    help="If checked, displays unaligned reference point cloud."
 )
+
 show_test_raw = st.sidebar.checkbox(
-    "Show Test (raw)",
+    "Show Test (raw)?",
     value=False,
-    help="Toggle to display the original (unaligned) test point cloud in a separate 3D plot."
+    help="If checked, displays unaligned test point cloud."
 )
 
 # -------------------------------------------------
 # File Uploader
 # -------------------------------------------------
 uploaded_files = st.file_uploader(
-    "Upload exactly two STL files: [Reference first, Test second]",
+    "Upload exactly 2 STL files: (Reference first, Test second)",
     type=["stl"],
     accept_multiple_files=True,
-    help="Please select 2 STL files. The first is the reference (ideal), the second is the test (to compare)."
+    help="First: Reference (ideal). Second: Test (comparison)."
 )
 
 if uploaded_files:
     if len(uploaded_files) != 2:
-        st.error("Please upload exactly 2 STL files (Reference first, then Test).")
+        st.error("Please upload exactly TWO STL files.")
     else:
-        with st.spinner("Processing..."):
-            # Save temp files
+        with st.spinner("Loading & Processing..."):
             temp_dir = tempfile.TemporaryDirectory()
             file_paths = []
+
             for i, f in enumerate(uploaded_files):
-                path = os.path.join(temp_dir.name, f"scan_{i}.stl")
-                with open(path, "wb") as out_file:
+                filepath = os.path.join(temp_dir.name, f"mesh_{i}.stl")
+                with open(filepath, "wb") as out_file:
                     out_file.write(f.getbuffer())
-                file_paths.append(path)
+                file_paths.append(filepath)
             
-            # Load & preprocess
-            ref_pcd = load_and_preprocess(
-                file_paths[0],
-                num_points=num_points,
-                nb_neighbors=nb_neighbors,
-                std_ratio=std_ratio
-            )
-            test_pcd = load_and_preprocess(
-                file_paths[1],
-                num_points=num_points,
-                nb_neighbors=nb_neighbors,
-                std_ratio=std_ratio
-            )
+            # Load
+            ref_mesh = load_mesh(file_paths[0])
+            test_mesh = load_mesh(file_paths[1])
             
-            # Alignment
-            aligned_pcd, reg_result = align_point_clouds(
+            # Sample & clean
+            ref_pcd = sample_point_cloud(ref_mesh, num_points, nb_neighbors, std_ratio)
+            test_pcd = sample_point_cloud(test_mesh, num_points, nb_neighbors, std_ratio)
+            
+            # Possibly show raw point clouds
+            if show_ref_raw or show_test_raw:
+                st.subheader("Raw (Unaligned) Point Clouds")
+                data_list = []
+                if show_ref_raw:
+                    data_list.append((
+                        np.asarray(ref_pcd.points),
+                        "#00CC96",
+                        "Reference Raw"
+                    ))
+                if show_test_raw:
+                    data_list.append((
+                        np.asarray(test_pcd.points),
+                        "#EF553B",
+                        "Test Raw"
+                    ))
+                
+                if data_list:
+                    fig_raw = plot_multiple_point_clouds(data_list, point_size)
+                    st.plotly_chart(fig_raw, use_container_width=True)
+            
+            # Global Registration (RANSAC) - optional
+            transformation_init = np.eye(4)
+            if use_global_registration:
+                ref_down, ref_fpfh = prepare_for_global_registration(ref_pcd, voxel_size_global)
+                test_down, test_fpfh = prepare_for_global_registration(test_pcd, voxel_size_global)
+                
+                result_ransac = global_registration_ransac(
+                    test_down, ref_down, test_fpfh, ref_fpfh, voxel_size_global
+                )
+                transformation_init = result_ransac.transformation
+            
+            # Refine with ICP
+            # We pass the original (full) point clouds with normals
+            icp_result = refine_registration_icp(
                 test_pcd,
                 ref_pcd,
-                voxel_size=voxel_size,
-                threshold=threshold,
-                max_iterations=max_iterations
+                transformation_init,
+                icp_threshold,
+                icp_max_iter
             )
             
-            # Deviation
-            deviations = calculate_deviations(aligned_pcd, ref_pcd)
+            # Transform the test cloud using ICP's final transform
+            test_aligned = transform_point_cloud(test_pcd, icp_result.transformation)
             
-            # Display results
+            # Compute deviations
+            distances = compute_deviations(test_aligned, ref_pcd)
+            
+            # Show some results
             col1, col2 = st.columns(2)
             
             with col1:
                 st.subheader("Alignment Metrics")
-                df_metrics = pd.DataFrame({
+                st.write("**RANSAC + ICP**")
+                metrics_data = pd.DataFrame({
                     "Metric": ["Fitness", "RMSE"],
-                    "Value": [reg_result.fitness, reg_result.inlier_rmse]
+                    "Value": [icp_result.fitness, icp_result.inlier_rmse]
                 })
-                st.dataframe(df_metrics.set_index("Metric"), use_container_width=True)
-                
-                # Offset
-                offset = np.asarray(aligned_pcd.points).mean(axis=0) - np.asarray(ref_pcd.points).mean(axis=0)
-                st.write("**Mean Position Offset (mm)**:")
-                st.write(f"X: {offset[0]:.4f}, Y: {offset[1]:.4f}, Z: {offset[2]:.4f}")
+                st.dataframe(metrics_data.set_index("Metric"))
             
             with col2:
                 st.subheader("Deviation Statistics")
-                st.metric("Max Deviation (mm)", f"{np.max(deviations):.3f}")
-                st.metric("Avg Deviation (mm)", f"{np.mean(deviations):.3f}")
-                st.metric("Std Dev (mm)", f"{np.std(deviations):.3f}")
+                st.metric("Max Deviation (mm)", f"{distances.max():.3f}")
+                st.metric("Avg Deviation (mm)", f"{distances.mean():.3f}")
+                st.metric("Std Dev (mm)", f"{distances.std():.3f}")
                 
+                # Quick distribution chart
                 st.write("**Deviation Distribution**:")
-                hist_data = pd.DataFrame({"Deviation (mm)": deviations})
-                st.bar_chart(hist_data, y="Deviation (mm)")
+                dist_df = pd.DataFrame({"Deviation (mm)": distances})
+                st.bar_chart(dist_df, y="Deviation (mm)")
             
-            # 3D Deviation Map
-            st.subheader("3D Deviation Map")
-            aligned_points = np.asarray(aligned_pcd.points)
-            fig_heatmap = plotly_heatmap(
+            # 3D Heatmap of aligned test
+            st.subheader("3D Deviation Map (Aligned Test → Reference)")
+            aligned_points = np.asarray(test_aligned.points)
+            fig_heatmap = plot_point_cloud_heatmap(
                 aligned_points,
-                deviations,
-                point_size=point_size,
-                color_scale=color_scale,
-                title="Deviation after Alignment"
+                distances,
+                point_size,
+                color_scale,
+                title="Deviation after Global + ICP"
             )
             st.plotly_chart(fig_heatmap, use_container_width=True)
             
-            # Optional: Show raw reference/test points
-            if show_ref_raw or show_test_raw:
-                st.subheader("Raw (Unaligned) Point Clouds")
-                data_to_plot = []
-                if show_ref_raw:
-                    data_to_plot.append((
-                        np.asarray(ref_pcd.points),
-                        "#00CC96",  # greenish
-                        "Reference (raw)"
-                    ))
-                if show_test_raw:
-                    data_to_plot.append((
-                        np.asarray(test_pcd.points),
-                        "#EF553B",  # reddish
-                        "Test (raw)"
-                    ))
-                
-                raw_fig = plot_point_clouds(data_to_plot, point_size=point_size)
-                st.plotly_chart(raw_fig, use_container_width=True)
+            # Calculate mean offset
+            offset = aligned_points.mean(axis=0) - np.asarray(ref_pcd.points).mean(axis=0)
+            st.markdown(
+                f"**Mean Position Offset**: "
+                f"X: {offset[0]:.4f}, Y: {offset[1]:.4f}, Z: {offset[2]:.4f} (mm)"
+            )
             
-            # Export
-            aligned_df = pd.DataFrame(
-                np.hstack((aligned_points, deviations.reshape(-1, 1))),
+            # Download results
+            download_df = pd.DataFrame(
+                np.hstack((aligned_points, distances.reshape(-1, 1))),
                 columns=["X", "Y", "Z", "Deviation"]
             )
             st.download_button(
-                label="Download Aligned + Deviation Data (CSV)",
-                data=aligned_df.to_csv(index=False).encode("utf-8"),
+                label="Download Aligned & Deviation Data (CSV)",
+                data=download_df.to_csv(index=False).encode("utf-8"),
                 file_name="aligned_deviation_data.csv"
             )
-            
+
 else:
-    st.info("Please upload two STL files to begin.")
+    st.info("Upload two STL files (Reference, Test) to begin.")
