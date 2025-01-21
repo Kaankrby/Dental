@@ -41,7 +41,7 @@ def align_point_clouds(
     source: o3d.geometry.PointCloud,
     target: o3d.geometry.PointCloud,
     voxel_size: float = 0.1,
-    threshold: float = 0.2,        # Smaller default threshold for dental models
+    threshold: float = 0.2,
     max_iterations: int = 200
 ) -> (o3d.geometry.PointCloud, o3d.pipelines.registration.RegistrationResult):
     """
@@ -154,21 +154,88 @@ def plot_point_clouds(
     return fig
 
 # -------------------------------------------------
-# Sidebar Controls
+# Sidebar Controls with "help" Text
 # -------------------------------------------------
 st.sidebar.header("Parameters")
-num_points = st.sidebar.slider("Points to Sample", 500, 20000, 2000, step=500)
-nb_neighbors = st.sidebar.slider("Outlier Neighbors", 5, 50, 20)
-std_ratio = st.sidebar.slider("Outlier Std Ratio", 1.0, 5.0, 2.0)
-voxel_size = st.sidebar.slider("Downsample Voxel Size (ICP)", 0.01, 1.0, 0.1, step=0.01)
-threshold = st.sidebar.slider("ICP Threshold (mm)", 0.01, 2.0, 0.2, step=0.01)
-max_iterations = st.sidebar.slider("ICP Max Iterations", 50, 1000, 200, step=50)
-point_size = st.sidebar.slider("3D Plot Point Size", 1, 10, 3)
-color_scale = st.sidebar.selectbox("Heatmap Color Scale", ["Hot", "Viridis", "Rainbow", "Blues", "Reds"])
+
+num_points = st.sidebar.slider(
+    "Points to Sample",
+    min_value=500,
+    max_value=20000,
+    value=2000,
+    step=500,
+    help="Number of points to uniformly sample from the STL mesh. Higher = more detail, but slower."
+)
+
+nb_neighbors = st.sidebar.slider(
+    "Outlier Neighbors",
+    min_value=5,
+    max_value=50,
+    value=20,
+    help="Number of neighbors to consider for outlier removal. Larger values can remove more noise, but might remove valid points."
+)
+
+std_ratio = st.sidebar.slider(
+    "Outlier Std Ratio",
+    min_value=1.0,
+    max_value=5.0,
+    value=2.0,
+    step=0.5,
+    help="Points outside this standard deviation ratio (in local neighborhoods) are removed as outliers."
+)
+
+voxel_size = st.sidebar.slider(
+    "Downsample Voxel Size (ICP)",
+    min_value=0.01,
+    max_value=1.0,
+    value=0.1,
+    step=0.01,
+    help="Voxel size for downsampling during ICP. Helps reduce processing time and noise."
+)
+
+threshold = st.sidebar.slider(
+    "ICP Threshold (mm)",
+    min_value=0.01,
+    max_value=2.0,
+    value=0.2,
+    step=0.01,
+    help="Maximum distance (in mm) between corresponding points in ICP. For small dental models, use a smaller threshold."
+)
+
+max_iterations = st.sidebar.slider(
+    "ICP Max Iterations",
+    min_value=50,
+    max_value=1000,
+    value=200,
+    step=50,
+    help="Maximum number of ICP iterations. More iterations can refine alignment, but increase computation time."
+)
+
+point_size = st.sidebar.slider(
+    "3D Plot Point Size",
+    min_value=1,
+    max_value=10,
+    value=3,
+    help="Marker size for the 3D scatter plot."
+)
+
+color_scale = st.sidebar.selectbox(
+    "Heatmap Color Scale",
+    ["Hot", "Viridis", "Rainbow", "Blues", "Reds"],
+    help="Color mapping scheme for visualizing deviation values in the 3D scatter plot."
+)
 
 # Toggles to show reference/test raw point clouds
-show_ref_raw = st.sidebar.checkbox("Show Reference (raw)", value=False)
-show_test_raw = st.sidebar.checkbox("Show Test (raw)", value=False)
+show_ref_raw = st.sidebar.checkbox(
+    "Show Reference (raw)",
+    value=False,
+    help="Toggle to display the original (unaligned) reference point cloud in a separate 3D plot."
+)
+show_test_raw = st.sidebar.checkbox(
+    "Show Test (raw)",
+    value=False,
+    help="Toggle to display the original (unaligned) test point cloud in a separate 3D plot."
+)
 
 # -------------------------------------------------
 # File Uploader
@@ -176,7 +243,8 @@ show_test_raw = st.sidebar.checkbox("Show Test (raw)", value=False)
 uploaded_files = st.file_uploader(
     "Upload exactly two STL files: [Reference first, Test second]",
     type=["stl"],
-    accept_multiple_files=True
+    accept_multiple_files=True,
+    help="Please select 2 STL files. The first is the reference (ideal), the second is the test (to compare)."
 )
 
 if uploaded_files:
@@ -268,8 +336,6 @@ if uploaded_files:
                         "Reference (raw)"
                     ))
                 if show_test_raw:
-                    # We'll show the test points BEFORE alignment
-                    # If you want the aligned version, you already see it above in the heatmap.
                     data_to_plot.append((
                         np.asarray(test_pcd.points),
                         "#EF553B",  # reddish
