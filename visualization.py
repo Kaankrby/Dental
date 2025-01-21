@@ -246,55 +246,114 @@ def plot_reference_points(
 
 def plot_preparation_zones(
     points: np.ndarray,
-    zones: np.ndarray,
+    labels: np.ndarray,
     point_size: int,
     title: str
 ) -> go.Figure:
-    """Create a 3D visualization of cavity preparation zones."""
-    zone_colors = {
-        0: '#EF553B',  # Margin
-        1: '#00CC96',  # Walls
-        2: '#AB63FA',  # Floor
-    }
+    """Create an interactive 3D scatter plot of cavity regions."""
+    # Generate colors for each region
+    unique_labels = np.unique(labels[labels >= 0])
+    colors = px.colors.qualitative.Set3[:len(unique_labels)]
     
     fig = go.Figure()
     
-    for zone_id in np.unique(zones):
-        zone_points = points[zones == zone_id]
-        zone_name = ['Margin', 'Walls', 'Floor'][zone_id]
-        
+    # Plot each region with a different color
+    for i, label in enumerate(unique_labels):
+        mask = labels == label
         fig.add_trace(go.Scatter3d(
-            x=zone_points[:, 0],
-            y=zone_points[:, 1],
-            z=zone_points[:, 2],
+            x=points[mask, 0],
+            y=points[mask, 1],
+            z=points[mask, 2],
             mode='markers',
             marker=dict(
                 size=point_size,
-                color=zone_colors[zone_id],
-                opacity=0.7
+                color=colors[i],
+                opacity=0.8
             ),
-            name=zone_name,
-            hovertemplate=(
-                f"{zone_name}<br>" +
-                "X: %{x:.2f}<br>" +
-                "Y: %{y:.2f}<br>" +
-                "Z: %{z:.2f}<br>" +
-                "<extra></extra>"
-            )
+            name=f'Region {label + 1}'
+        ))
+    
+    # Plot noise points if any
+    noise_mask = labels == -1
+    if np.any(noise_mask):
+        fig.add_trace(go.Scatter3d(
+            x=points[noise_mask, 0],
+            y=points[noise_mask, 1],
+            z=points[noise_mask, 2],
+            mode='markers',
+            marker=dict(
+                size=point_size,
+                color='gray',
+                opacity=0.3
+            ),
+            name='Noise'
         ))
     
     fig.update_layout(
         title=title,
         scene=dict(
-            aspectmode='data',
-            camera=dict(
-                up=dict(x=0, y=0, z=1),
-                center=dict(x=0, y=0, z=0),
-                eye=dict(x=1.5, y=1.5, z=1.5)
+            xaxis_title='X (mm)',
+            yaxis_title='Y (mm)',
+            zaxis_title='Z (mm)',
+            aspectmode='data'
+        ),
+        showlegend=True
+    )
+    
+    return fig
+
+def plot_region(
+    points: np.ndarray,
+    labels: np.ndarray,
+    point_size: int,
+    title: str
+) -> go.Figure:
+    """Create an interactive 3D scatter plot of cavity regions."""
+    # Generate colors for each region
+    unique_labels = np.unique(labels[labels >= 0])
+    colors = px.colors.qualitative.Set3[:len(unique_labels)]
+    
+    fig = go.Figure()
+    
+    # Plot each region with a different color
+    for i, label in enumerate(unique_labels):
+        mask = labels == label
+        fig.add_trace(go.Scatter3d(
+            x=points[mask, 0],
+            y=points[mask, 1],
+            z=points[mask, 2],
+            mode='markers',
+            marker=dict(
+                size=point_size,
+                color=colors[i],
+                opacity=0.8
             ),
-            xaxis_title="X (mm)",
-            yaxis_title="Y (mm)",
-            zaxis_title="Z (mm)"
+            name=f'Region {label + 1}'
+        ))
+    
+    # Plot noise points if any
+    noise_mask = labels == -1
+    if np.any(noise_mask):
+        fig.add_trace(go.Scatter3d(
+            x=points[noise_mask, 0],
+            y=points[noise_mask, 1],
+            z=points[noise_mask, 2],
+            mode='markers',
+            marker=dict(
+                size=point_size,
+                color='gray',
+                opacity=0.3
+            ),
+            name='Noise'
+        ))
+    
+    fig.update_layout(
+        title=title,
+        scene=dict(
+            xaxis_title='X (mm)',
+            yaxis_title='Y (mm)',
+            zaxis_title='Z (mm)',
+            aspectmode='data'
         ),
         showlegend=True
     )

@@ -1,7 +1,13 @@
 import numpy as np
 import streamlit as st
-from typing import Tuple, Optional, Dict
-from utils import performance_monitor, process_mesh, compute_cavity_metrics
+from typing import Tuple, Optional, Dict, List
+from utils import (
+    performance_monitor,
+    process_mesh,
+    compute_cavity_metrics,
+    identify_cavity_regions,
+    compute_region_weights
+)
 from scipy.spatial.transform import Rotation
 from scipy.optimize import minimize
 
@@ -9,23 +15,41 @@ class STLAnalyzer:
     def __init__(self):
         self.reference_points = None
         self.reference_bbox = None
+        self.reference_regions = None
+        self.region_labels = None
         self.test_points = {}
         self.results = {}
         
     @performance_monitor
-    def load_reference(self, file_path: str, num_points: int, nb_neighbors: int, std_ratio: float):
+    def load_reference(
+        self,
+        file_path: str,
+        num_points: int,
+        nb_neighbors: int,
+        std_ratio: float,
+        detect_regions: bool = False,
+        eps: float = None,
+        min_samples: int = None
+    ):
         """Load and process pre-cropped reference cavity model."""
-        self.reference_points, self.reference_bbox = process_mesh(
+        self.reference_points, self.reference_bbox, _ = process_mesh(
             file_path,
             num_points,
             nb_neighbors,
             std_ratio
         )
         
+        if detect_regions and eps is not None and min_samples is not None:
+            self.region_labels, self.reference_regions = identify_cavity_regions(
+                self.reference_points,
+                eps=eps,
+                min_samples=min_samples
+            )
+        
     @performance_monitor
     def add_test_file(self, file_path: str, num_points: int, nb_neighbors: int, std_ratio: float):
         """Load and process a student's test cavity model."""
-        points, _ = process_mesh(
+        points, _, _ = process_mesh(
             file_path,
             num_points,
             nb_neighbors,
@@ -76,7 +100,9 @@ class STLAnalyzer:
     def process_test_file(
         self,
         file_path: str,
-        icp_max_iter: int = 100
+        use_regions: bool = False,
+        region_weights: Optional[np.ndarray] = None,
+        tolerance: float = 0.5
     ) -> Dict:
         """Process a student's test file and compute cavity metrics."""
         if self.reference_points is None:
@@ -87,15 +113,17 @@ class STLAnalyzer:
         # Align points
         aligned_points, rmse = self.align_point_clouds(
             test_points,
-            self.reference_points,
-            max_iterations=icp_max_iter
+            self.reference_points
         )
         
         # Compute metrics
         metrics = compute_cavity_metrics(
             aligned_points,
             self.reference_points,
-            self.reference_bbox
+            self.reference_bbox,
+            regions=self.reference_regions if use_regions else None,
+            weights=region_weights if use_regions else None,
+            tolerance=tolerance
         )
         
         # Add alignment quality metrics

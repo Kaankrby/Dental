@@ -4,8 +4,14 @@ import pandas as pd
 import tempfile
 import os
 from processing import STLAnalyzer
-from visualization import plot_cavity_deviation_map, plot_cavity_analysis_summary, plot_deviation_histogram, plot_reference_points
-from utils import validate_file_name
+from visualization import (
+    plot_cavity_deviation_map,
+    plot_cavity_analysis_summary,
+    plot_deviation_histogram,
+    plot_reference_points,
+    plot_preparation_zones
+)
+from utils import validate_file_name, compute_region_weights
 
 # -------------------------------------------------
 # Streamlit Page Configuration
@@ -25,7 +31,9 @@ The reference model should be pre-cropped to show only the cavity region of inte
 # Initialize session state
 if 'analyzer' not in st.session_state:
     st.session_state['analyzer'] = STLAnalyzer()
-    
+    st.session_state['reference_regions'] = None
+    st.session_state['region_weights'] = None
+
 # -------------------------------------------------
 # Sidebar Parameters
 # -------------------------------------------------
@@ -50,32 +58,25 @@ with st.sidebar:
         help="Higher values remove more outliers"
     )
     
-    # Registration Parameters
-    st.subheader("Model Alignment")
-    use_global_registration = st.checkbox(
-        "Use Global Registration",
+    # Region Detection Parameters
+    st.subheader("Region Detection")
+    region_detection = st.checkbox(
+        "Enable Region Detection",
         value=True,
-        help="Recommended for initial rough alignment"
+        help="Detect and analyze distinct regions in the cavity"
     )
     
-    if use_global_registration:
-        voxel_size_global = st.slider(
-            "Global Alignment Precision",
-            0.1, 5.0, 2.0,
-            help="Lower values are more precise but slower"
+    if region_detection:
+        eps = st.slider(
+            "Region Size",
+            0.1, 2.0, 0.5,
+            help="Larger values merge regions, smaller values create more regions"
         )
-        
-    icp_threshold = st.slider(
-        "Fine Alignment Precision",
-        0.01, 2.0, 0.2,
-        help="Maximum distance between points for fine alignment"
-    )
-    
-    icp_max_iter = st.slider(
-        "Maximum Iterations",
-        10, 1000, 100,
-        help="Maximum iterations for fine alignment"
-    )
+        min_samples = st.slider(
+            "Minimum Region Points",
+            5, 50, 10,
+            help="Minimum points to form a region"
+        )
     
     # Analysis Parameters
     st.subheader("Cavity Analysis")
@@ -92,12 +93,6 @@ with st.sidebar:
         "Color Scale",
         ["RdYlBu", "viridis", "plasma", "inferno"]
     )
-    
-    show_reference = st.checkbox(
-        "Show Reference Model",
-        value=False,
-        help="Display the reference cavity region"
-    )
 
 # -------------------------------------------------
 # Main Panel: File Upload and Processing
@@ -109,6 +104,79 @@ reference_file = st.file_uploader(
     help="Upload the pre-cropped reference cavity model"
 )
 
+if reference_file:
+    try:
+        # Create temporary directory
+        with tempfile.TemporaryDirectory() as temp_dir:
+            # Save and process reference file
+            ref_path = os.path.join(temp_dir, "reference.stl")
+            with open(ref_path, "wb") as f:
+                f.write(reference_file.getbuffer())
+            
+            # Process reference with region detection if enabled
+            analyzer = st.session_state['analyzer']
+            analyzer.load_reference(
+                ref_path,
+                num_points,
+                nb_neighbors,
+                std_ratio,
+                detect_regions=region_detection,
+                eps=eps if region_detection else None,
+                min_samples=min_samples if region_detection else None
+            )
+            
+            # Display reference model
+            st.subheader("Reference Model Visualization")
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                # Show reference points
+                ref_fig = plot_reference_points(
+                    analyzer.reference_points,
+                    point_size,
+                    "Reference Cavity Points"
+                )
+                st.plotly_chart(ref_fig, use_container_width=True)
+            
+            if region_detection and analyzer.reference_regions:
+                with col2:
+                    # Show detected regions
+                    st.subheader("Detected Cavity Regions")
+                    region_fig = plot_preparation_zones(
+                        analyzer.reference_points,
+                        analyzer.region_labels,
+                        point_size,
+                        "Cavity Regions"
+                    )
+                    st.plotly_chart(region_fig, use_container_width=True)
+                
+                # Region weights
+                st.subheader("Region Weights")
+                weights = compute_region_weights(analyzer.reference_regions)
+                
+                # Allow manual weight adjustment
+                adjusted_weights = []
+                cols = st.columns(len(weights))
+                for i, (w, col) in enumerate(zip(weights, cols)):
+                    with col:
+                        adjusted_weight = st.slider(
+                            f"Region {i+1}",
+                            0.0, 1.0, float(w),
+                            help=f"Weight for region {i+1}"
+                        )
+                        adjusted_weights.append(adjusted_weight)
+                
+                # Normalize adjusted weights
+                adjusted_weights = np.array(adjusted_weights)
+                adjusted_weights = adjusted_weights / np.sum(adjusted_weights)
+                st.session_state['region_weights'] = adjusted_weights
+                
+    except Exception as e:
+        st.error(f"Error processing reference file: {str(e)}")
+
+# -------------------------------------------------
+# Student Model Analysis
+# -------------------------------------------------
 st.subheader("2. Upload Student Models")
 test_files = st.file_uploader(
     "Student Models (STL)",
@@ -128,33 +196,6 @@ if run_pressed:
         try:
             # Create temporary directory
             with tempfile.TemporaryDirectory() as temp_dir:
-                # Process reference
-                with st.spinner("Processing reference cavity model..."):
-                    if not validate_file_name(reference_file.name):
-                        st.error("Invalid reference file name!")
-                        st.stop()
-                        
-                    ref_path = os.path.join(temp_dir, "reference.stl")
-                    with open(ref_path, "wb") as f:
-                        f.write(reference_file.getbuffer())
-                    
-                    analyzer = st.session_state['analyzer']
-                    analyzer.load_reference(
-                        ref_path,
-                        num_points,
-                        nb_neighbors,
-                        std_ratio
-                    )
-                    
-                    if show_reference:
-                        st.subheader("Reference Cavity Region")
-                        ref_fig = plot_reference_points(
-                            np.asarray(analyzer.reference_pcd.points),
-                            point_size,
-                            "Reference Cavity Region"
-                        )
-                        st.plotly_chart(ref_fig, use_container_width=True)
-                
                 # Process student models
                 for test_file in test_files:
                     if not validate_file_name(test_file.name):
@@ -177,10 +218,9 @@ if run_pressed:
                         # Process and analyze
                         result = analyzer.process_test_file(
                             test_path,
-                            use_global_registration,
-                            voxel_size_global if use_global_registration else 1.0,
-                            icp_threshold,
-                            icp_max_iter
+                            use_regions=region_detection,
+                            region_weights=st.session_state.get('region_weights'),
+                            tolerance=tolerance_range
                         )
                         
                         # Display results
@@ -200,10 +240,16 @@ if run_pressed:
                                     f"{metrics['mean_deviation']:.2f} mm"
                                 )
                             with col3:
-                                st.metric(
-                                    "Points Analyzed",
-                                    f"{metrics['points_in_cavity']}"
-                                )
+                                if 'weighted_score' in metrics:
+                                    st.metric(
+                                        "Overall Score",
+                                        f"{metrics['weighted_score']:.1f}%"
+                                    )
+                                else:
+                                    st.metric(
+                                        "Points Analyzed",
+                                        f"{metrics['points_in_cavity']}"
+                                    )
                             
                             # Preparation quality summary
                             st.subheader("Preparation Quality Analysis")
@@ -212,6 +258,15 @@ if run_pressed:
                                 f"Preparation Quality: {test_file.name}"
                             )
                             st.plotly_chart(quality_fig, use_container_width=True)
+                            
+                            # Region-specific results
+                            if 'region_metrics' in metrics:
+                                st.subheader("Region Analysis")
+                                region_df = pd.DataFrame(metrics['region_metrics'])
+                                st.dataframe(
+                                    region_df.set_index('label'),
+                                    use_container_width=True
+                                )
                             
                             # Detailed visualizations
                             col1, col2 = st.columns(2)
@@ -238,26 +293,6 @@ if run_pressed:
                                     tolerance_range=tolerance_range
                                 )
                                 st.plotly_chart(fig_hist, use_container_width=True)
-                            
-                            # Detailed metrics
-                            st.subheader("Detailed Metrics")
-                            metrics_df = pd.DataFrame({
-                                'Metric': [
-                                    'Points Within Tolerance',
-                                    'Underprepared Points',
-                                    'Overprepared Points',
-                                    'Registration Fitness',
-                                    'Registration RMSE'
-                                ],
-                                'Value': [
-                                    f"{100 - (metrics['underprepared_points'] + metrics['overprepared_points'])/metrics['points_in_cavity']*100:.1f}%",
-                                    f"{metrics['underprepared_points']/metrics['points_in_cavity']*100:.1f}%",
-                                    f"{metrics['overprepared_points']/metrics['points_in_cavity']*100:.1f}%",
-                                    f"{metrics['fitness']:.3f}",
-                                    f"{metrics['inlier_rmse']:.3f} mm"
-                                ]
-                            })
-                            st.dataframe(metrics_df.set_index('Metric'))
                             
                             # Export options
                             st.subheader("Export Results")
