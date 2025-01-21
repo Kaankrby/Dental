@@ -12,6 +12,7 @@ from visualization import (
     plot_preparation_zones
 )
 from utils import validate_file_name, compute_region_weights
+import plotly.express as px
 
 # -------------------------------------------------
 # Streamlit Page Configuration
@@ -22,6 +23,117 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+# Add help text and tooltips
+with st.sidebar:
+    st.markdown("""
+    ### 📋 Instructions
+    1. Upload a reference cavity model (STL)
+    2. Adjust analysis parameters if needed
+    3. Upload student models to analyze
+    4. Click 'Analyze Preparations' to start
+    
+    ### 🎯 Tips
+    - Enable region detection to analyze specific areas
+    - Adjust weights to prioritize important regions
+    - Use the tolerance range to set acceptable deviations
+    """)
+    
+    with st.expander("ℹ️ About Parameters"):
+        st.markdown("""
+        **Point Cloud Generation**
+        - Higher point counts give more detailed analysis but take longer
+        - Neighbors and cleaning strength control outlier removal
+        
+        **Region Detection**
+        - Larger region size merges nearby areas
+        - Minimum points prevents tiny regions
+        
+        **Visualization**
+        - Adjust point size for better visibility
+        - Different color scales highlight different aspects
+        """)
+
+# Add file type validation
+def validate_stl_file(uploaded_file) -> bool:
+    """Validate uploaded STL file."""
+    if uploaded_file is None:
+        return False
+    
+    if not uploaded_file.name.lower().endswith('.stl'):
+        st.error(f"Invalid file type: {uploaded_file.name}. Please upload an STL file.")
+        return False
+    
+    if uploaded_file.size > 50 * 1024 * 1024:  # 50MB limit
+        st.error(f"File too large: {uploaded_file.name}. Maximum size is 50MB.")
+        return False
+    
+    return True
+
+# Add session state for analysis results
+if 'analysis_results' not in st.session_state:
+    st.session_state['analysis_results'] = {}
+
+# Add export options
+def export_results_to_csv(results: dict, filename: str):
+    """Export analysis results to CSV."""
+    try:
+        metrics_df = pd.DataFrame(results['metrics'])
+        csv = metrics_df.to_csv(index=False)
+        st.download_button(
+            "📊 Download Results (CSV)",
+            csv,
+            filename,
+            "text/csv",
+            key=f'download_{filename}'
+        )
+    except Exception as e:
+        st.error(f"Error exporting results: {str(e)}")
+
+# Add comparison features
+def compare_results(results_dict: dict):
+    """Compare multiple analysis results."""
+    if len(results_dict) > 1:
+        st.subheader("📈 Comparison Analysis")
+        
+        # Prepare comparison data
+        comparison_data = []
+        for filename, result in results_dict.items():
+            metrics = result['metrics']
+            comparison_data.append({
+                'File': filename,
+                'Max Deviation': metrics['max_deviation'],
+                'Mean Deviation': metrics['mean_deviation'],
+                'Score': metrics.get('weighted_score', 0),
+                'Points': metrics['points_in_cavity']
+            })
+        
+        # Create comparison table
+        comparison_df = pd.DataFrame(comparison_data)
+        st.dataframe(comparison_df.set_index('File'))
+        
+        # Create comparison charts
+        col1, col2 = st.columns(2)
+        with col1:
+            fig = px.bar(
+                comparison_df,
+                x='File',
+                y=['Max Deviation', 'Mean Deviation'],
+                title='Deviation Comparison',
+                barmode='group'
+            )
+            st.plotly_chart(fig, use_container_width=True)
+        
+        with col2:
+            if 'Score' in comparison_df.columns:
+                fig = px.bar(
+                    comparison_df,
+                    x='File',
+                    y='Score',
+                    title='Score Comparison'
+                )
+                st.plotly_chart(fig, use_container_width=True)
+
+# Main interface
 st.title("🦷 Dental Cavity Preparation Analyzer")
 st.markdown("""
 This tool analyzes student cavity preparations against a reference model. 
@@ -104,7 +216,7 @@ reference_file = st.file_uploader(
     help="Upload the pre-cropped reference cavity model"
 )
 
-if reference_file:
+if reference_file and validate_stl_file(reference_file):
     try:
         # Create temporary directory
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -198,8 +310,7 @@ if run_pressed:
             with tempfile.TemporaryDirectory() as temp_dir:
                 # Process student models
                 for test_file in test_files:
-                    if not validate_file_name(test_file.name):
-                        st.error(f"Invalid file name: {test_file.name}")
+                    if not validate_stl_file(test_file):
                         continue
                         
                     with st.spinner(f"Analyzing: {test_file.name}"):
@@ -208,6 +319,7 @@ if run_pressed:
                         with open(test_path, "wb") as f:
                             f.write(test_file.getbuffer())
                             
+                        analyzer = st.session_state['analyzer']
                         analyzer.add_test_file(
                             test_path,
                             num_points,
@@ -301,15 +413,12 @@ if run_pressed:
                                 columns=['X', 'Y', 'Z', 'Deviation']
                             )
                             
-                            st.download_button(
-                                "Download Analysis (CSV)",
-                                export_data.to_csv(index=False).encode('utf-8'),
-                                f"cavity_analysis_{test_file.name}.csv",
-                                "text/csv",
-                                help="Download point-wise deviation data"
-                            )
+                            export_results_to_csv(result, f"cavity_analysis_{test_file.name}")
                 
                 st.success("Analysis complete! 🎉")
+                
+                # Compare results
+                compare_results(st.session_state['analysis_results'])
                 
         except Exception as e:
             st.error(f"An error occurred: {str(e)}")
