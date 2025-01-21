@@ -15,7 +15,7 @@ def performance_monitor(func):
         return result
     return wrapper
 
-@st.cache_data
+@st.cache_resource
 def load_mesh(stl_path: str) -> o3d.geometry.TriangleMesh:
     """
     Load and clean an STL mesh with improved error handling and validation.
