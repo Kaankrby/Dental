@@ -138,3 +138,21 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 - Open3D team for the 3D processing library
 - Streamlit team for the web framework
 - Plotly team for visualization capabilities
+
+## Streamlit Cloud Deployment
+
+1. Fork this repository to your GitHub account
+2. Go to [Streamlit Cloud](https://streamlit.io/cloud)
+3. Click "New app"
+4. Select your forked repository
+5. Select the main branch and `stl_analyzer.py` as the main file
+6. Click "Deploy"
+
+The app will be automatically deployed and available at a public URL.
+
+### Important Notes for Cloud Deployment
+
+- Maximum file upload size is set to 50MB
+- Temporary files are automatically cleaned up
+- Session state is maintained per user
+- All computations are performed in-memory
