@@ -1,1 +1,7 @@
+open3d
+streamlit
+numpy
+pandas
+plotly
+# etc. any other packages you need
 
