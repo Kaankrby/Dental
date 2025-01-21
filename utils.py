@@ -1,90 +1,158 @@
-import re
+import open3d as o3d
 import numpy as np
-import trimesh
-from typing import Tuple
+import streamlit as st
+import time
+from typing import Tuple, List, Dict, Any
+from functools import wraps
+
+def performance_monitor(func):
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        start_time = time.time()
+        result = func(*args, **kwargs)
+        execution_time = time.time() - start_time
+        st.sidebar.text(f"{func.__name__} took {execution_time:.2f}s")
+        return result
+    return wrapper
+
+@st.cache_data
+def load_mesh(stl_path: str) -> o3d.geometry.TriangleMesh:
+    """
+    Load and clean an STL mesh with improved error handling and validation.
+    
+    Args:
+        stl_path: Path to the STL file
+        
+    Returns:
+        Cleaned mesh object
+        
+    Raises:
+        ValueError: If mesh is invalid or empty
+    """
+    try:
+        # Validate file size
+        import os
+        file_size = os.path.getsize(stl_path)
+        max_size = 100 * 1024 * 1024  # 100MB limit
+        if file_size > max_size:
+            raise ValueError(f"File too large: {file_size/1024/1024:.1f}MB (max {max_size/1024/1024}MB)")
+            
+        mesh = o3d.io.read_triangle_mesh(stl_path)
+        
+        # Validate mesh
+        if not mesh.has_triangles():
+            raise ValueError("Mesh has no triangles")
+            
+        # Clean mesh
+        mesh.remove_degenerate_triangles()
+        mesh.remove_duplicated_triangles()
+        mesh.remove_non_manifold_edges()
+        
+        # Validate cleaned mesh
+        if len(mesh.triangles) == 0:
+            raise ValueError("Mesh has no valid triangles after cleaning")
+            
+        return mesh
+        
+    except Exception as e:
+        st.error(f"Error loading mesh: {str(e)}")
+        raise
+
+@st.cache_data
+def sample_point_cloud(
+    mesh: o3d.geometry.TriangleMesh,
+    num_points: int,
+    nb_neighbors: int,
+    std_ratio: float
+) -> o3d.geometry.PointCloud:
+    """
+    Convert mesh to point cloud with improved sampling and validation.
+    
+    Args:
+        mesh: Input mesh
+        num_points: Number of points to sample
+        nb_neighbors: Number of neighbors for outlier removal
+        std_ratio: Standard deviation ratio for outlier removal
+        
+    Returns:
+        Cleaned point cloud
+    """
+    try:
+        pcd = mesh.sample_points_uniformly(number_of_points=num_points)
+        
+        # Remove outliers
+        pcd_clean, _ = pcd.remove_statistical_outlier(
+            nb_neighbors=nb_neighbors,
+            std_ratio=std_ratio
+        )
+        
+        if len(pcd_clean.points) < num_points * 0.5:
+            st.warning(f"Warning: More than 50% of points removed as outliers")
+            
+        return pcd_clean
+        
+    except Exception as e:
+        st.error(f"Error in point cloud sampling: {str(e)}")
+        raise
+
+def compute_advanced_metrics(
+    source_aligned: o3d.geometry.PointCloud,
+    target: o3d.geometry.PointCloud
+) -> Dict[str, float]:
+    """
+    Compute advanced comparison metrics between point clouds.
+    
+    Args:
+        source_aligned: Aligned source point cloud
+        target: Target point cloud
+        
+    Returns:
+        Dictionary of metrics
+    """
+    metrics = {}
+    
+    try:
+        # Hausdorff distance
+        distances = compute_deviations(source_aligned, target)
+        metrics["hausdorff_distance"] = float(np.max(distances))
+        
+        # Point cloud statistics
+        source_points = np.asarray(source_aligned.points)
+        target_points = np.asarray(target.points)
+        
+        # Bounding box volume difference
+        source_bbox = source_aligned.get_axis_aligned_bounding_box()
+        target_bbox = target.get_axis_aligned_bounding_box()
+        source_vol = np.prod(source_bbox.get_extent())
+        target_vol = np.prod(target_bbox.get_extent())
+        metrics["volume_difference"] = abs(source_vol - target_vol)
+        
+        # Center of mass difference
+        source_com = np.mean(source_points, axis=0)
+        target_com = np.mean(target_points, axis=0)
+        metrics["center_of_mass_distance"] = float(np.linalg.norm(source_com - target_com))
+        
+        return metrics
+        
+    except Exception as e:
+        st.error(f"Error computing advanced metrics: {str(e)}")
+        return {"error": str(e)}
 
 def validate_file_name(filename: str) -> bool:
-    """Validate file name for security."""
-    return bool(re.match(r'^[\w\-. ]+$', filename))
-
-def load_stl_file(file_path: str) -> Tuple[np.ndarray, np.ndarray]:
-    """Load STL file and return vertices and faces."""
-    mesh = trimesh.load_mesh(file_path)
-    return mesh.vertices, mesh.faces
-
-def sample_points(vertices: np.ndarray, faces: np.ndarray, num_points: int) -> np.ndarray:
-    """Sample points from mesh surface."""
-    mesh = trimesh.Trimesh(vertices=vertices, faces=faces)
-    points, _ = trimesh.sample.sample_surface(mesh, num_points)
-    return points
-
-def compute_distances(source: np.ndarray, target: np.ndarray) -> np.ndarray:
-    """Compute distances between source and target points."""
-    target_tree = trimesh.proximity.ProximityQuery(trimesh.PointCloud(target))
-    distances = target_tree.signed_distance(source)
-    return distances
-
-def compute_point_normals(
-    points: np.ndarray,
-    reference_points: np.ndarray,
-    k: int = 20
-) -> np.ndarray:
-    """Compute approximate point normals using PCA on local neighborhoods."""
-    tree = trimesh.proximity.ProximityQuery(trimesh.PointCloud(reference_points))
-    _, indices = tree.kdtree.query(points, k=k)
+    """
+    Validate file name for security.
     
-    normals = np.zeros_like(points)
-    for i, idx in enumerate(indices):
-        neighbors = reference_points[idx]
-        centered = neighbors - np.mean(neighbors, axis=0)
-        u, _, _ = np.linalg.svd(centered)
-        normals[i] = u[:, -1]
+    Args:
+        filename: Name of the file to validate
         
-        if np.dot(normals[i], points[i] - np.mean(neighbors, axis=0)) < 0:
-            normals[i] *= -1
-            
-    return normals
-
-def compute_cavity_metrics(
-    test_points: np.ndarray,
-    reference_points: np.ndarray,
-    ref_bbox: Tuple[np.ndarray, np.ndarray],
-    tolerance: float = 0.5
-) -> dict:
-    """Compute cavity-specific metrics between test and reference points."""
-    min_bound, max_bound = ref_bbox
-    mask = np.all((test_points >= min_bound) & (test_points <= max_bound), axis=1)
-    cavity_points = test_points[mask]
-    
-    distances = compute_distances(cavity_points, reference_points)
-    
-    normals = compute_point_normals(cavity_points, reference_points)
-    signed_distances = distances * np.sign(np.sum(normals * (cavity_points - reference_points), axis=1))
-    
-    metrics = {
-        'cavity_points': cavity_points,
-        'distances': signed_distances,
-        'points_in_cavity': len(cavity_points),
-        'max_deviation': float(np.max(np.abs(signed_distances))),
-        'mean_deviation': float(np.mean(signed_distances)),
-        'std_deviation': float(np.std(signed_distances)),
-        'underprepared_points': int(np.sum(signed_distances > tolerance)),
-        'overprepared_points': int(np.sum(signed_distances < -tolerance))
-    }
-    
-    return metrics
-
-def get_bounding_box(points: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-    """Get axis-aligned bounding box for points."""
-    min_bound = np.min(points, axis=0)
-    max_bound = np.max(points, axis=0)
-    return min_bound, max_bound
-
-def points_in_box(
-    points: np.ndarray,
-    min_bound: np.ndarray,
-    max_bound: np.ndarray
-) -> np.ndarray:
-    """Get boolean mask for points within bounding box."""
-    mask = np.all((points >= min_bound) & (points <= max_bound), axis=1)
-    return mask
+    Returns:
+        True if filename is valid, False otherwise
+    """
+    import re
+    # Check for valid characters
+    if not re.match("^[a-zA-Z0-9_.-]+$", filename):
+        return False
+    # Check for valid extension
+    if not filename.lower().endswith('.stl'):
+        return False
+    return True
