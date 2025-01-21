@@ -9,8 +9,8 @@ import os
 # -------------------------------------------------
 # Streamlit Page Configuration
 # -------------------------------------------------
-st.set_page_config(page_title="Dental STL Analyzer (Global+ICP)", layout="wide")
-st.title("🦷 Dental STL Deviation Analyzer (Global Registration + ICP)")
+st.set_page_config(page_title="Dental STL Analyzer - Multiple Tests", layout="wide")
+st.title("🦷 Dental STL Deviation Analyzer")
 
 # -------------------------------------------------
 # Utility Functions
@@ -38,7 +38,8 @@ def sample_point_cloud(
     
     # Remove outliers
     pcd_clean, _ = pcd.remove_statistical_outlier(
-        nb_neighbors=nb_neighbors, std_ratio=std_ratio
+        nb_neighbors=nb_neighbors, 
+        std_ratio=std_ratio
     )
     return pcd_clean
 
@@ -71,7 +72,6 @@ def global_registration_ransac(
     Perform RANSAC-based global registration to get a coarse alignment.
     """
     distance_threshold = voxel_size * 1.5
-    
     result = o3d.pipelines.registration.registration_ransac_based_on_feature_matching(
         source_down,
         target_down,
@@ -99,7 +99,7 @@ def refine_registration_icp(
     """
     Refine alignment using ICP, starting from the given initial transform.
     """
-    # Estimate normals (good practice for small voxel sizes or small objects)
+    # Estimate normals
     source.estimate_normals()
     target.estimate_normals()
     
@@ -172,58 +172,24 @@ def plot_point_cloud_heatmap(
     )
     return fig
 
-def plot_multiple_point_clouds(
-    pcd_data: list,
-    point_size: int
-) -> go.Figure:
-    """
-    Plot multiple point clouds in one 3D figure, each with a distinct color or label.
-    :param pcd_data: List[ (points_ndarray, color_str, label_str) ]
-    """
-    fig = go.Figure()
-    for (points, color, label) in pcd_data:
-        fig.add_trace(
-            go.Scatter3d(
-                x=points[:,0],
-                y=points[:,1],
-                z=points[:,2],
-                mode='markers',
-                marker=dict(
-                    size=point_size,
-                    color=color,
-                    opacity=0.8
-                ),
-                name=label
-            )
-        )
-    fig.update_layout(
-        scene=dict(
-            xaxis_title="X",
-            yaxis_title="Y",
-            zaxis_title="Z"
-        ),
-        margin=dict(l=0, r=0, b=0, t=35)
-    )
-    return fig
-
 # -------------------------------------------------
 # Sidebar with Parameters
 # -------------------------------------------------
-st.sidebar.header("Registration Parameters")
+st.sidebar.header("Global Registration (RANSAC)")
 
 use_global_registration = st.sidebar.checkbox(
-    "Use Global Registration (RANSAC)?",
+    "Enable RANSAC?",
     value=True,
     help="Enable a coarse alignment step using RANSAC & FPFH features. If unchecked, only ICP is used."
 )
 
 voxel_size_global = st.sidebar.slider(
-    "Global Reg. Voxel Size",
+    "RANSAC Voxel Size",
     min_value=0.01,
     max_value=2.0,
     value=0.5,
     step=0.01,
-    help="Downsampling voxel size for RANSAC feature extraction. For small dental models, ~0.2-0.5 might work."
+    help="Voxel size for downsampling & FPFH. For small dental models, ~0.2-0.5 often works."
 )
 
 st.sidebar.header("ICP Parameters")
@@ -243,7 +209,7 @@ icp_max_iter = st.sidebar.slider(
     max_value=2000,
     value=300,
     step=50,
-    help="Higher iterations can improve accuracy but take longer."
+    help="Higher iterations can improve alignment, but take longer."
 )
 
 st.sidebar.header("Point Cloud Sampling / Outlier Removal")
@@ -262,7 +228,7 @@ nb_neighbors = st.sidebar.slider(
     min_value=5,
     max_value=50,
     value=20,
-    help="Number of neighbors for statistical outlier removal."
+    help="Neighbor count for statistical outlier removal."
 )
 
 std_ratio = st.sidebar.slider(
@@ -279,7 +245,7 @@ st.sidebar.header("Visualization")
 point_size = st.sidebar.slider(
     "3D Point Size",
     1, 10, 3,
-    help="Marker size in 3D plots."
+    help="Marker size in the 3D plot."
 )
 
 color_scale = st.sidebar.selectbox(
@@ -288,150 +254,163 @@ color_scale = st.sidebar.selectbox(
     help="Color mapping for deviation values."
 )
 
-show_ref_raw = st.sidebar.checkbox(
-    "Show Reference (raw)?",
-    value=False,
-    help="If checked, displays unaligned reference point cloud."
+# -------------------------------------------------
+# Main File Upload Panels
+# -------------------------------------------------
+st.subheader("1) Upload Reference STL")
+ref_file = st.file_uploader(
+    "Reference STL (Ideal)",
+    type=["stl"],
+    help="Upload the main reference/ideal dental model here."
 )
 
-show_test_raw = st.sidebar.checkbox(
-    "Show Test (raw)?",
-    value=False,
-    help="If checked, displays unaligned test point cloud."
-)
-
-# -------------------------------------------------
-# File Uploader
-# -------------------------------------------------
-uploaded_files = st.file_uploader(
-    "Upload exactly 2 STL files: (Reference first, Test second)",
+st.subheader("2) Upload Test STL(s)")
+test_files = st.file_uploader(
+    "Test STL(s)",
     type=["stl"],
     accept_multiple_files=True,
-    help="First: Reference (ideal). Second: Test (comparison)."
+    help="Upload one or more test models to compare against the reference."
 )
 
-if uploaded_files:
-    if len(uploaded_files) != 2:
-        st.error("Please upload exactly TWO STL files.")
-    else:
-        with st.spinner("Loading & Processing..."):
-            temp_dir = tempfile.TemporaryDirectory()
-            file_paths = []
+# -------------------------------------------------
+# Run Button
+# -------------------------------------------------
+if st.button("Run Alignment and Deviation Analysis"):
+    # We only proceed if we have a reference and at least one test STL
+    if ref_file is None:
+        st.warning("Please upload a reference STL before running.")
+        st.stop()
+    if not test_files:
+        st.warning("Please upload at least one test STL before running.")
+        st.stop()
 
-            for i, f in enumerate(uploaded_files):
-                filepath = os.path.join(temp_dir.name, f"mesh_{i}.stl")
-                with open(filepath, "wb") as out_file:
-                    out_file.write(f.getbuffer())
-                file_paths.append(filepath)
-            
-            # Load
-            ref_mesh = load_mesh(file_paths[0])
-            test_mesh = load_mesh(file_paths[1])
-            
-            # Sample & clean
-            ref_pcd = sample_point_cloud(ref_mesh, num_points, nb_neighbors, std_ratio)
-            test_pcd = sample_point_cloud(test_mesh, num_points, nb_neighbors, std_ratio)
-            
-            # Possibly show raw point clouds
-            if show_ref_raw or show_test_raw:
-                st.subheader("Raw (Unaligned) Point Clouds")
-                data_list = []
-                if show_ref_raw:
-                    data_list.append((
-                        np.asarray(ref_pcd.points),
-                        "#00CC96",
-                        "Reference Raw"
-                    ))
-                if show_test_raw:
-                    data_list.append((
-                        np.asarray(test_pcd.points),
-                        "#EF553B",
-                        "Test Raw"
-                    ))
-                
-                if data_list:
-                    fig_raw = plot_multiple_point_clouds(data_list, point_size)
-                    st.plotly_chart(fig_raw, use_container_width=True)
-            
-            # Global Registration (RANSAC) - optional
-            transformation_init = np.eye(4)
+    with st.spinner("Processing..."):
+        temp_dir = tempfile.TemporaryDirectory()
+
+        # --- Load Reference ---
+        ref_path = os.path.join(temp_dir.name, "ref.stl")
+        with open(ref_path, "wb") as out_file:
+            out_file.write(ref_file.getbuffer())
+        ref_mesh = load_mesh(ref_path)
+        ref_pcd = sample_point_cloud(ref_mesh, num_points, nb_neighbors, std_ratio)
+
+        # Precompute data for RANSAC if needed
+        if use_global_registration:
+            ref_down, ref_fpfh = prepare_for_global_registration(ref_pcd, voxel_size_global)
+
+        # We'll collect results from each test file in a list
+        all_results = []
+
+        # --- Process each Test File ---
+        for i, test_file in enumerate(test_files):
+            test_path = os.path.join(temp_dir.name, f"test_{i}.stl")
+            with open(test_path, "wb") as out_file:
+                out_file.write(test_file.getbuffer())
+
+            test_mesh = load_mesh(test_path)
+            test_pcd_raw = sample_point_cloud(test_mesh, num_points, nb_neighbors, std_ratio)
+
+            # --- Global Registration (RANSAC) ---
+            transform_init = np.eye(4)
             if use_global_registration:
-                ref_down, ref_fpfh = prepare_for_global_registration(ref_pcd, voxel_size_global)
-                test_down, test_fpfh = prepare_for_global_registration(test_pcd, voxel_size_global)
-                
-                result_ransac = global_registration_ransac(
-                    test_down, ref_down, test_fpfh, ref_fpfh, voxel_size_global
+                test_down, test_fpfh = prepare_for_global_registration(test_pcd_raw, voxel_size_global)
+                ransac_result = global_registration_ransac(
+                    test_down, 
+                    ref_down, 
+                    test_fpfh, 
+                    ref_fpfh, 
+                    voxel_size_global
                 )
-                transformation_init = result_ransac.transformation
-            
-            # Refine with ICP
-            # We pass the original (full) point clouds with normals
+                transform_init = ransac_result.transformation
+
+            # --- ICP Refinement ---
             icp_result = refine_registration_icp(
-                test_pcd,
+                test_pcd_raw,
                 ref_pcd,
-                transformation_init,
+                transform_init,
                 icp_threshold,
                 icp_max_iter
             )
-            
-            # Transform the test cloud using ICP's final transform
-            test_aligned = transform_point_cloud(test_pcd, icp_result.transformation)
-            
+
+            # Transform test cloud using final ICP matrix
+            test_aligned = transform_point_cloud(test_pcd_raw, icp_result.transformation)
+
             # Compute deviations
             distances = compute_deviations(test_aligned, ref_pcd)
-            
-            # Show some results
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                st.subheader("Alignment Metrics")
-                st.write("**RANSAC + ICP**")
-                metrics_data = pd.DataFrame({
-                    "Metric": ["Fitness", "RMSE"],
-                    "Value": [icp_result.fitness, icp_result.inlier_rmse]
-                })
-                st.dataframe(metrics_data.set_index("Metric"))
-            
-            with col2:
-                st.subheader("Deviation Statistics")
-                st.metric("Max Deviation (mm)", f"{distances.max():.3f}")
-                st.metric("Avg Deviation (mm)", f"{distances.mean():.3f}")
-                st.metric("Std Dev (mm)", f"{distances.std():.3f}")
+            offset = test_aligned.points.mean(axis=0) - ref_pcd.points.mean(axis=0)
+
+            # Prepare results dictionary
+            result_dict = {
+                "test_filename": test_file.name,
+                "fitness": icp_result.fitness,
+                "rmse": icp_result.inlier_rmse,
+                "max_deviation": distances.max(),
+                "avg_deviation": distances.mean(),
+                "std_deviation": distances.std(),
+                "offset_x": offset[0],
+                "offset_y": offset[1],
+                "offset_z": offset[2],
+                "aligned_points": np.asarray(test_aligned.points),
+                "distances": distances
+            }
+            all_results.append(result_dict)
+
+        # --- Display Results ---
+        st.success("All test models have been aligned successfully!")
+        
+        # Summarize each test in a collapsible section
+        for result in all_results:
+            with st.expander(f"Results for {result['test_filename']}"):
+                c1, c2 = st.columns(2)
                 
-                # Quick distribution chart
-                st.write("**Deviation Distribution**:")
-                dist_df = pd.DataFrame({"Deviation (mm)": distances})
-                st.bar_chart(dist_df, y="Deviation (mm)")
-            
-            # 3D Heatmap of aligned test
-            st.subheader("3D Deviation Map (Aligned Test → Reference)")
-            aligned_points = np.asarray(test_aligned.points)
-            fig_heatmap = plot_point_cloud_heatmap(
-                aligned_points,
-                distances,
-                point_size,
-                color_scale,
-                title="Deviation after Global + ICP"
-            )
-            st.plotly_chart(fig_heatmap, use_container_width=True)
-            
-            # Calculate mean offset
-            offset = aligned_points.mean(axis=0) - np.asarray(ref_pcd.points).mean(axis=0)
-            st.markdown(
-                f"**Mean Position Offset**: "
-                f"X: {offset[0]:.4f}, Y: {offset[1]:.4f}, Z: {offset[2]:.4f} (mm)"
-            )
-            
-            # Download results
-            download_df = pd.DataFrame(
-                np.hstack((aligned_points, distances.reshape(-1, 1))),
-                columns=["X", "Y", "Z", "Deviation"]
-            )
-            st.download_button(
-                label="Download Aligned & Deviation Data (CSV)",
-                data=download_df.to_csv(index=False).encode("utf-8"),
-                file_name="aligned_deviation_data.csv"
-            )
+                with c1:
+                    st.subheader("Alignment Metrics")
+                    st.write("**Fitness & RMSE**")
+                    df_metrics = pd.DataFrame({
+                        "Metric": ["Fitness", "RMSE"],
+                        "Value": [result["fitness"], result["rmse"]]
+                    })
+                    st.dataframe(df_metrics.set_index("Metric"))
+                    
+                    st.write("**Mean Position Offset (mm)**")
+                    st.write(f"X: {result['offset_x']:.4f}, "
+                             f"Y: {result['offset_y']:.4f}, "
+                             f"Z: {result['offset_z']:.4f}")
+                
+                with c2:
+                    st.subheader("Deviation Statistics")
+                    st.metric("Max Deviation (mm)", f"{result['max_deviation']:.3f}")
+                    st.metric("Avg Deviation (mm)", f"{result['avg_deviation']:.3f}")
+                    st.metric("Std Dev (mm)", f"{result['std_deviation']:.3f}")
+                    
+                    st.write("**Deviation Distribution**")
+                    dist_df = pd.DataFrame({"Deviation (mm)": result["distances"]})
+                    st.bar_chart(dist_df, y="Deviation (mm)")
+
+                # 3D Heatmap
+                st.subheader("3D Deviation Map")
+                fig_heatmap = plot_point_cloud_heatmap(
+                    result["aligned_points"],
+                    result["distances"],
+                    point_size,
+                    color_scale,
+                    title=f"Deviation: {result['test_filename']}"
+                )
+                st.plotly_chart(fig_heatmap, use_container_width=True)
+                
+                # Download CSV with aligned coords + deviation
+                output_df = pd.DataFrame(
+                    np.column_stack([
+                        result["aligned_points"],
+                        result["distances"]
+                    ]),
+                    columns=["X", "Y", "Z", "Deviation"]
+                )
+                st.download_button(
+                    label="Download Aligned + Deviation (CSV)",
+                    data=output_df.to_csv(index=False).encode("utf-8"),
+                    file_name=f"{result['test_filename']}_aligned_data.csv"
+                )
 
 else:
-    st.info("Upload two STL files (Reference, Test) to begin.")
+    st.info("Please upload your reference and test files, then click 'Run Alignment and Deviation Analysis'.")
