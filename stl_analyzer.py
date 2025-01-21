@@ -9,8 +9,8 @@ import os
 # -------------------------------------------------
 # Streamlit Page Configuration
 # -------------------------------------------------
-st.set_page_config(page_title="Dental STL Analyzer (Global+ICP, Multi-Test)", layout="wide")
-st.title("🦷 Dental STL Deviation Analyzer")
+st.set_page_config(page_title="Dental STL Analyzer (Cropped Reference)", layout="wide")
+st.title("🦷 Dental STL Deviation Analyzer (With Cropped Reference)")
 
 # -------------------------------------------------
 # Utility Functions
@@ -273,6 +273,16 @@ std_ratio = st.sidebar.slider(
     help="Std ratio for outlier removal. Points beyond this are removed."
 )
 
+st.sidebar.header("Bounding Box Filtering")
+ignore_outside_bbox = st.sidebar.checkbox(
+    "Ignore Points Outside Reference BBox?",
+    value=True,
+    help=(
+        "If checked, we only analyze the part of the test model that overlaps the "
+        "reference bounding box, ignoring geometry outside the cropped reference region."
+    )
+)
+
 st.sidebar.header("Visualization")
 
 point_size = st.sidebar.slider(
@@ -302,11 +312,11 @@ show_test_raw = st.sidebar.checkbox(
 # -------------------------------------------------
 # Main Panel: Separate Upload for Reference & Test
 # -------------------------------------------------
-st.subheader("1. Upload Reference STL")
+st.subheader("1. Upload Cropped Reference STL")
 reference_file = st.file_uploader(
-    label="Reference (Ideal) STL",
+    label="Reference (Ideal, Cropped) STL",
     type=["stl"],
-    help="Upload your reference STL here."
+    help="Upload your cropped reference STL here (only the region to analyze)."
 )
 
 st.subheader("2. Upload One or More Test STL Files")
@@ -336,6 +346,9 @@ if run_pressed:
             
             ref_mesh = load_mesh(ref_path)
             ref_pcd = sample_point_cloud(ref_mesh, num_points, nb_neighbors, std_ratio)
+            
+            # We'll compute the bounding box for the cropped reference
+            ref_bbox = ref_pcd.get_axis_aligned_bounding_box()
         
         # Optionally show raw reference points
         if show_ref_raw:
@@ -390,7 +403,12 @@ if run_pressed:
                 # Transform test pcd
                 test_aligned = transform_point_cloud(test_pcd, icp_result.transformation)
                 
-                # Compute deviations
+                # If ignoring geometry outside reference bounding box, filter test points
+                if ignore_outside_bbox:
+                    idx_in_bbox = ref_bbox.get_point_indices_within_bounding_box(test_aligned.points)
+                    test_aligned = test_aligned.select_by_index(idx_in_bbox)
+                
+                # Compute deviations for the remaining points
                 distances = compute_deviations(test_aligned, ref_pcd)
                 
                 # Show results in an expander for each test file
@@ -407,44 +425,50 @@ if run_pressed:
                     
                     with col2:
                         st.write("**Deviation Statistics**")
-                        st.metric("Max Deviation (mm)", f"{distances.max():.3f}")
-                        st.metric("Avg Deviation (mm)", f"{distances.mean():.3f}")
-                        st.metric("Std Dev (mm)", f"{distances.std():.3f}")
+                        if len(distances) == 0:
+                            st.warning("No points remained in the bounding box; no deviations to report.")
+                        else:
+                            st.metric("Max Deviation (mm)", f"{distances.max():.3f}")
+                            st.metric("Avg Deviation (mm)", f"{distances.mean():.3f}")
+                            st.metric("Std Dev (mm)", f"{distances.std():.3f}")
+                            
+                            st.write("**Deviation Distribution**:")
+                            dist_df = pd.DataFrame({"Deviation (mm)": distances})
+                            st.bar_chart(dist_df, y="Deviation (mm)")
+                    
+                    # 3D Heatmap (only if there are points)
+                    if len(distances) > 0:
+                        st.write("**Deviation Map** (Filtered to Reference BBox)")
+                        aligned_points = np.asarray(test_aligned.points)
+                        fig_heatmap = plot_point_cloud_heatmap(
+                            aligned_points,
+                            distances,
+                            point_size,
+                            color_scale,
+                            title=f"Aligned Deviation: {test_file.name}"
+                        )
+                        st.plotly_chart(fig_heatmap, use_container_width=True)
                         
-                        st.write("**Deviation Distribution**:")
-                        dist_df = pd.DataFrame({"Deviation (mm)": distances})
-                        st.bar_chart(dist_df, y="Deviation (mm)")
-                    
-                    # 3D Heatmap
-                    st.write("**Deviation Map**")
-                    aligned_points = np.asarray(test_aligned.points)
-                    fig_heatmap = plot_point_cloud_heatmap(
-                        aligned_points,
-                        distances,
-                        point_size,
-                        color_scale,
-                        title=f"Aligned Deviation: {test_file.name}"
-                    )
-                    st.plotly_chart(fig_heatmap, use_container_width=True)
-                    
-                    # Mean position offset
-                    offset = aligned_points.mean(axis=0) - np.asarray(ref_pcd.points).mean(axis=0)
-                    st.markdown(
-                        f"**Mean Position Offset** (mm): "
-                        f"X={offset[0]:.4f}, Y={offset[1]:.4f}, Z={offset[2]:.4f}"
-                    )
-                    
-                    # Download CSV for this test
-                    download_df = pd.DataFrame(
-                        np.hstack((aligned_points, distances.reshape(-1,1))),
-                        columns=["X", "Y", "Z", "Deviation"]
-                    )
-                    st.download_button(
-                        label="Download Aligned Deviation Data (CSV)",
-                        data=download_df.to_csv(index=False).encode("utf-8"),
-                        file_name=f"aligned_deviation_{test_file.name}.csv"
-                    )
+                        # Mean position offset
+                        offset = aligned_points.mean(axis=0) - np.asarray(ref_pcd.points).mean(axis=0)
+                        st.markdown(
+                            f"**Mean Position Offset** (mm): "
+                            f"X={offset[0]:.4f}, Y={offset[1]:.4f}, Z={offset[2]:.4f}"
+                        )
+                        
+                        # Download CSV for this test
+                        download_df = pd.DataFrame(
+                            np.hstack((aligned_points, distances.reshape(-1,1))),
+                            columns=["X", "Y", "Z", "Deviation"]
+                        )
+                        st.download_button(
+                            label="Download Aligned Deviation Data (CSV)",
+                            data=download_df.to_csv(index=False).encode("utf-8"),
+                            file_name=f"aligned_deviation_{test_file.name}.csv"
+                        )
+                    else:
+                        st.info("No valid points to visualize or export. Possibly the test model is entirely outside the cropped region.")
                 
         st.success("All test files processed!")
 else:
-    st.info("Upload a reference STL, test STL(s), and click 'Run Registration' to begin.")
+    st.info("Upload a cropped reference STL, one or more test STL(s), and click 'Run Registration' to begin.")
