@@ -2,7 +2,7 @@ import open3d as o3d
 import numpy as np
 import streamlit as st
 from typing import Tuple, Optional, Dict, Any
-from utils import performance_monitor
+from utils import performance_monitor, validate_mesh_watertight, load_mesh, sample_point_cloud
 
 class STLAnalyzer:
     def __init__(self):
@@ -13,14 +13,10 @@ class STLAnalyzer:
         self.results = {}
         
     @performance_monitor
-    def load_reference(self, file_path: str, num_points: int, 
-                      nb_neighbors: int, std_ratio: float) -> None:
-        """Load and process reference STL file with validation."""
-        from utils import load_mesh, sample_point_cloud
-        
+    def load_reference(self, file_path: str, num_points: int, nb_neighbors: int, std_ratio: float):
+        """Load and process reference STL file."""
         self.reference_mesh = load_mesh(file_path)
-        validate_mesh_watertight(self.reference_mesh)  # New validation
-        
+        validate_mesh_watertight(self.reference_mesh)
         self.reference_pcd = sample_point_cloud(
             self.reference_mesh,
             num_points,
@@ -28,7 +24,7 @@ class STLAnalyzer:
             std_ratio
         )
         self.reference_bbox = self.reference_pcd.get_axis_aligned_bounding_box()
-        self._precompute_reference_features()  # New precomputation
+        self._precompute_reference_features()
         
     def _precompute_reference_features(self) -> None:
         """Precompute features for faster comparisons."""
