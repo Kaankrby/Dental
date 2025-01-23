@@ -1,1 +1,1 @@
-python-3.10  # Streamlit's current max supported version
+python-3.10
