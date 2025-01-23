@@ -1,3 +1,6 @@
+import os
+os.environ['OPEN3D_CPU_RENDERING'] = 'true'
+
 import plotly.graph_objects as go
 import numpy as np
 from typing import List, Tuple

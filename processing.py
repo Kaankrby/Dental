@@ -1,3 +1,5 @@
+import os
+os.environ['OPEN3D_CPU_RENDERING'] = 'true'
 import open3d as o3d
 import numpy as np
 import streamlit as st
