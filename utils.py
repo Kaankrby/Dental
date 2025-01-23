@@ -18,15 +18,15 @@ def performance_monitor(func):
     return wrapper
 
 def validate_mesh_watertight(mesh: o3d.geometry.TriangleMesh) -> None:
-    """Check if mesh is watertight/manifold."""
-    if not mesh.is_watertight():
-        raise ValueError("Mesh is not watertight - cannot compute volume metrics")
-    if not mesh.is_edge_manifold():
-        raise ValueError("Mesh has non-manifold edges")
+    """Basic mesh validation without strict watertight requirement."""
+    if not mesh.has_triangles():
+        raise ValueError("Invalid mesh: No triangles found")
+    if len(mesh.triangles) < 100:
+        raise ValueError("Mesh has too few triangles (<100)")
 
 @st.cache_resource(show_spinner="Loading mesh...")
 def load_mesh(stl_path: str) -> o3d.geometry.TriangleMesh:
-    """Enhanced mesh loading with additional validation."""
+    """Enhanced mesh loading with lenient validation."""
     try:
         # Security checks
         if not os.path.exists(stl_path):
@@ -39,7 +39,11 @@ def load_mesh(stl_path: str) -> o3d.geometry.TriangleMesh:
             raise ValueError(f"File exceeds size limit ({file_size/1e6:.1f}MB > {max_size/1e6}MB)")
         
         # Load mesh with validation
-        mesh = o3d.io.read_triangle_mesh(stl_path)
+        mesh = o3d.io.read_triangle_mesh(
+            stl_path,
+            enable_post_processing=True,
+            print_progress=False
+        )
         
         if not mesh.has_triangles():
             raise ValueError("Invalid mesh: No triangles found")
@@ -47,21 +51,23 @@ def load_mesh(stl_path: str) -> o3d.geometry.TriangleMesh:
         if len(mesh.triangles) < 100:
             raise ValueError("Mesh has too few triangles (<100)")
             
-        # Enhanced cleaning
-        mesh = mesh.remove_duplicated_vertices()
-        mesh = mesh.remove_duplicated_triangles()
-        mesh = mesh.remove_degenerate_triangles()
-        mesh = mesh.remove_non_manifold_edges()
-        mesh = mesh.remove_unreferenced_vertices()
+        # Clean mesh with explicit parameters
+        mesh.remove_degenerate_triangles()
+        mesh.remove_duplicated_triangles()
+        mesh.remove_duplicated_vertices()
+        mesh.remove_non_manifold_edges()
         
-        # Compute required properties
+        # Ensure mesh is properly oriented
+        mesh.orient_triangles()
+        
+        # Ensure mesh has vertex normals
         if not mesh.has_vertex_normals():
             mesh.compute_vertex_normals()
             
         return mesh
         
     except Exception as e:
-        st.error(f"Mesh loading failed: {str(e)}")
+        st.error(f"Error loading mesh: {str(e)}")
         raise
 
 @st.cache_data

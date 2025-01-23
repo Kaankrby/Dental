@@ -2,7 +2,7 @@ import open3d as o3d
 import numpy as np
 import streamlit as st
 from typing import Tuple, Optional, Dict, Any
-from utils import performance_monitor, validate_mesh_watertight
+from utils import performance_monitor, validate_mesh_watertight, compute_advanced_metrics
 
 class STLAnalyzer:
     def __init__(self):
@@ -178,7 +178,6 @@ class STLAnalyzer:
                 raise ValueError("No points remaining after bbox filtering")
                 
         # Enhanced metrics calculation
-        from utils import compute_advanced_metrics
         metrics = compute_advanced_metrics(
             test_aligned, 
             self.reference_pcd,
@@ -198,3 +197,62 @@ class STLAnalyzer:
         }
         
         return self.results[file_path]
+
+def compute_advanced_metrics(
+    source_aligned: o3d.geometry.PointCloud,
+    target: o3d.geometry.PointCloud,
+    target_kdtree: o3d.geometry.KDTreeFlann,
+    target_normals: np.ndarray
+) -> Dict[str, Any]:
+    """Compute comparison metrics between point clouds."""
+    metrics = {}
+    
+    try:
+        # Calculate point-to-point distances
+        distances = []
+        source_points = np.asarray(source_aligned.points)
+        target_points = np.asarray(target.points)
+        
+        for point in source_points:
+            k, idx, dist = target_kdtree.search_knn_vector_3d(point, 1)
+            distances.append(np.sqrt(dist[0]))
+        
+        distances = np.array(distances)
+        
+        # Basic statistics
+        metrics["mean_deviation"] = float(np.mean(distances))
+        metrics["max_deviation"] = float(np.max(distances))
+        metrics["std_deviation"] = float(np.std(distances))
+        metrics["distances"] = distances
+        
+        # Bounding box volume comparison
+        source_bbox = source_aligned.get_axis_aligned_bounding_box()
+        target_bbox = target.get_axis_aligned_bounding_box()
+        source_vol = np.prod(source_bbox.get_extent())
+        target_vol = np.prod(target_bbox.get_extent())
+        metrics["volume_similarity"] = min(source_vol, target_vol) / max(source_vol, target_vol)
+        
+        # Center of mass difference
+        source_com = np.mean(source_points, axis=0)
+        target_com = np.mean(target_points, axis=0)
+        metrics["center_of_mass_distance"] = float(np.linalg.norm(source_com - target_com))
+        
+        # Normal angle analysis (if normals available)
+        source_normals = np.asarray(source_aligned.normals)
+        normal_dots = np.abs(np.sum(source_normals * target_normals[idx], axis=1))
+        metrics["mean_normal_angle"] = float(np.rad2deg(np.arccos(np.clip(np.mean(normal_dots), -1.0, 1.0))))
+        
+        return metrics
+        
+    except Exception as e:
+        st.error(f"Error computing metrics: {str(e)}")
+        return {
+            "error": str(e),
+            "mean_deviation": 0.0,
+            "max_deviation": 0.0,
+            "std_deviation": 0.0,
+            "volume_similarity": 0.0,
+            "center_of_mass_distance": 0.0,
+            "mean_normal_angle": 0.0,
+            "distances": np.array([])
+        }
