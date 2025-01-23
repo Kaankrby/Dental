@@ -227,14 +227,13 @@ if st.button("🚀 Start Analysis", type="primary"):
                             np.column_stack((aligned_points, distances)),
                             columns=['X', 'Y', 'Z', 'Deviation']
                         )
-                    
-                    # Export section
-                    st.download_button(
-                        label="⬇️ Download Full Report",
-                        data=generate_report(result),
-                        file_name=f"report_{test_name}.pdf",
-                        mime="application/pdf"
-                    )
+
+                        st.download_button(
+                            "📥 Download Results (CSV)",
+                            export_data.to_csv(index=False).encode('utf-8'),
+                            f"results_{test_file.name}.csv",
+                            "text/csv"
+                        )
             
             progress_bar.progress(100)
             st.success("✅ Analysis completed successfully!")
