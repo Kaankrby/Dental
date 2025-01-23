@@ -77,6 +77,20 @@ def compute_advanced_metrics(
     target_com = np.mean(np.asarray(target.points), axis=0)
     com_dist = np.linalg.norm(source_com - target_com)
     
+    # Calculate normal angle differences
+    source_normals = np.asarray(source_aligned.normals)
+    target_normals = np.asarray(target.normals)
+    target_kdtree = o3d.geometry.KDTreeFlann(target)
+    
+    normal_angles = []
+    for i, point in enumerate(source_aligned.points):
+        [_, idx, _] = target_kdtree.search_knn_vector_3d(point, 1)
+        dot_product = np.clip(np.abs(np.dot(source_normals[i], target_normals[idx[0]])), -1.0, 1.0)
+        angle = np.arccos(dot_product)
+        normal_angles.append(angle)
+    
+    mean_normal_angle = float(np.rad2deg(np.mean(normal_angles)))
+    
     return {
         'distances': distances,
         'mean_deviation': float(mean_dev),
@@ -84,7 +98,8 @@ def compute_advanced_metrics(
         'hausdorff_distance': float(max_dev),
         'volume_difference': float(volume_diff),
         'volume_similarity': float(volume_sim),
-        'center_of_mass_distance': float(com_dist)
+        'center_of_mass_distance': float(com_dist),
+        'mean_normal_angle': mean_normal_angle
     }
 
 def validate_file_name(filename: str) -> bool:
