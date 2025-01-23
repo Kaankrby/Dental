@@ -1,0 +1,4 @@
+libgl1-mesa-glx
+libgomp1
+libosmesa6
+libglu1-mesa
