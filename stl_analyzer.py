@@ -198,42 +198,35 @@ if st.button("🚀 Start Analysis", type="primary"):
                         st.dataframe(metrics_df)
                     
                     with col_viz:
-                        st.subheader("📐 3D Visualization")
-                        tab1, tab2, tab3 = st.tabs(["Deviation Map", "Normal Angles", "Histograms"])
-                        
-                        with tab1:
-                            fig = plot_point_cloud_heatmap(
-                                np.asarray(result['aligned_pcd'].points),
-                                result['metrics']['distances'],
+                        st.subheader("Deviation Analysis")
+                        aligned_points = np.asarray(result['aligned_pcd'].points)
+                        distances = np.asarray(metrics['distances'])
+
+                        col3, col4 = st.columns(2)
+                        with col3:
+                            # 3D deviation map
+                            fig_heatmap = plot_point_cloud_heatmap(
+                                aligned_points,
+                                distances,
                                 point_size,
                                 color_scale,
-                                f"Deviation Map: {test_name}"
+                                f"Deviation Map: {test_file.name}"
                             )
-                            st.plotly_chart(fig, use_container_width=True)
-                            
-                        with tab2:
-                            fig = plot_normal_angle_distribution(
-                                np.asarray(result['aligned_pcd'].points),
-                                result['metrics']['normal_angles'],
-                                point_size,
-                                color_scale
+                            st.plotly_chart(fig_heatmap, use_container_width=True)
+
+                        with col4:
+                            # Histogram
+                            fig_hist = plot_deviation_histogram(
+                                distances,
+                                title=f"Deviation Distribution: {test_file.name}"
                             )
-                            st.plotly_chart(fig, use_container_width=True)
-                            
-                        with tab3:
-                            col_hist1, col_hist2 = st.columns(2)
-                            with col_hist1:
-                                fig = plot_deviation_histogram(
-                                    result['metrics']['distances'],
-                                    title="Deviation Distribution"
-                                )
-                                st.plotly_chart(fig, use_container_width=True)
-                            with col_hist2:
-                                fig = plot_deviation_histogram(
-                                    result['metrics']['normal_angles'],
-                                    title="Normal Angle Distribution"
-                                )
-                                st.plotly_chart(fig, use_container_width=True)
+                            st.plotly_chart(fig_hist, use_container_width=True)
+
+                        # Export options
+                        export_data = pd.DataFrame(
+                            np.column_stack((aligned_points, distances)),
+                            columns=['X', 'Y', 'Z', 'Deviation']
+                        )
                     
                     # Export section
                     st.download_button(

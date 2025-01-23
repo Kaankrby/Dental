@@ -89,6 +89,7 @@ def compute_advanced_metrics(
         angle = np.arccos(dot_product)
         normal_angles.append(angle)
     
+    normal_angles = np.array(normal_angles)
     mean_normal_angle = float(np.rad2deg(np.mean(normal_angles)))
     
     return {
@@ -99,7 +100,8 @@ def compute_advanced_metrics(
         'volume_difference': float(volume_diff),
         'volume_similarity': float(volume_sim),
         'center_of_mass_distance': float(com_dist),
-        'mean_normal_angle': mean_normal_angle
+        'mean_normal_angle': mean_normal_angle,
+        'normal_angles': np.rad2deg(normal_angles)  # Convert to degrees for visualization
     }
 
 def validate_file_name(filename: str) -> bool:
