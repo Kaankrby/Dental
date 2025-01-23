@@ -1,5 +1,6 @@
-libgl1-mesa-glx
-xvfb
 python3-dev
 build-essential
-libgomp1
+libgl1-mesa-glx
+xvfb
+python3-distutils
+python3-setuptools
