@@ -1,5 +1,0 @@
-python3-dev
-build-essential
-libgomp1
-libosmesa6
-libglu1-mesa
