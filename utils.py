@@ -70,6 +70,7 @@ def compute_advanced_metrics(
     source_vol = np.prod(source_bbox.get_extent())
     target_vol = np.prod(target_bbox.get_extent())
     volume_diff = abs(source_vol - target_vol)
+    volume_sim = min(source_vol, target_vol) / max(source_vol, target_vol)
     
     # Calculate center of mass distance
     source_com = np.mean(np.asarray(source_aligned.points), axis=0)
@@ -82,6 +83,7 @@ def compute_advanced_metrics(
         'max_deviation': float(max_dev),
         'hausdorff_distance': float(max_dev),
         'volume_difference': float(volume_diff),
+        'volume_similarity': float(volume_sim),
         'center_of_mass_distance': float(com_dist)
     }
 
