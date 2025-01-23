@@ -141,3 +141,44 @@ def plot_deviation_histogram(
         height=400
     )
     return fig
+
+
+def plot_multiple_point_clouds(  # Make sure this exact name exists
+    pcd_data: List[Tuple[np.ndarray, str, str]],
+    point_size: int
+) -> go.Figure:
+    """Enhanced visualization for multiple point clouds."""
+    fig = go.Figure()
+    
+    for points, color, label in pcd_data:
+        fig.add_trace(
+            go.Scatter3d(
+                x=points[:, 0],
+                y=points[:, 1],
+                z=points[:, 2],
+                mode='markers',
+                marker=dict(
+                    size=point_size,
+                    color=color,
+                    opacity=0.7
+                ),
+                name=label
+            )
+        )
+    
+    fig.update_layout(
+        scene=dict(
+            aspectmode='data',
+            xaxis_title="X (mm)",
+            yaxis_title="Y (mm)",
+            zaxis_title="Z (mm)"
+        ),
+        margin=dict(l=0, r=0, b=0, t=30),
+        legend=dict(
+            yanchor="top",
+            y=0.99,
+            xanchor="left",
+            x=0.01
+        )
+    )
+    return fig
