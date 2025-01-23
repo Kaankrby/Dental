@@ -186,7 +186,16 @@ if st.button("🚀 Start Analysis", type="primary"):
                             st.metric("Max Deviation", f"{metrics['max_deviation']:.3f} mm")
                             st.metric("Normal Alignment", f"{metrics['mean_normal_angle']:.1f}°")
                             
-                        st.dataframe(pd.DataFrame.from_dict(metrics, orient='index').rename(columns={0: 'Value'}))
+                        metrics_df = pd.DataFrame({
+                            'Value': [
+                                f"{metrics['fitness']:.4f}",
+                                f"{metrics['inlier_rmse']:.4f}",
+                                f"{metrics['hausdorff_distance']:.4f}",
+                                f"{metrics['volume_difference']:.4f}",
+                                f"{metrics['center_of_mass_distance']:.4f}"
+                            ]
+                        }, index=['Fitness', 'RMSE', 'Hausdorff', 'Volume Diff', 'CoM Distance'])
+                        st.dataframe(metrics_df)
                     
                     with col_viz:
                         st.subheader("📐 3D Visualization")
