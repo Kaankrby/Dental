@@ -1,7 +1,7 @@
 import open3d as o3d
 import numpy as np
 import streamlit as st
-from typing import Tuple, Optional, Dict
+from typing import Tuple, Optional, Dict, Any
 from utils import performance_monitor
 
 class STLAnalyzer:
