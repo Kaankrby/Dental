@@ -54,10 +54,16 @@ def plot_point_cloud_heatmap(
     return fig
 
 def plot_multiple_point_clouds(
-    pcd_data: List[Tuple[np.ndarray, str, str]],
+    pcd_data: list[tuple[np.ndarray, str, str]],
     point_size: int
 ) -> go.Figure:
-    """Visualize multiple point clouds in different colors."""
+    """
+    Visualize multiple point clouds in different colors
+    
+    Parameters:
+    pcd_data: List of tuples (points_array, color_hex, label)
+    point_size: Size of points in visualization
+    """
     fig = go.Figure()
     
     for points, color, label in pcd_data:
@@ -83,13 +89,7 @@ def plot_multiple_point_clouds(
             yaxis_title="Y (mm)",
             zaxis_title="Z (mm)"
         ),
-        margin=dict(l=0, r=0, b=0, t=30),
-        legend=dict(
-            yanchor="top",
-            y=0.99,
-            xanchor="left",
-            x=0.01
-        )
+        margin=dict(l=0, r=0, b=0, t=30)
     )
     return fig
 
