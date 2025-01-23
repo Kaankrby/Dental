@@ -1,23 +1,8 @@
-import os
-# Disable GUI and rendering
-os.environ['OPEN3D_CPU_RENDERING'] = 'true'
-os.environ['OPEN3D_ENABLE_GUI_WIDGETX'] = 'false'
-os.environ['PYOPENGL_PLATFORM'] = 'osmesa'
-os.environ['DISPLAY'] = ':99'
-
+import open3d as o3d
 import numpy as np
 import streamlit as st
-from typing import Tuple, Optional, Dict, Any
-
-# Import Open3D with error handling
-try:
-    import open3d as o3d
-    # Disable visualization module
-    o3d.utility.set_verbosity_level(o3d.utility.VerbosityLevel.Error)
-except ImportError as e:
-    st.error("Failed to import Open3D. Please check your installation.")
-    raise e
-from utils import performance_monitor, validate_mesh_watertight, compute_advanced_metrics
+from typing import Tuple, Optional, Dict
+from utils import performance_monitor
 
 class STLAnalyzer:
     def __init__(self):
