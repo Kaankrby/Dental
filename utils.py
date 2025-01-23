@@ -60,6 +60,10 @@ def compute_advanced_metrics(
     dists = source_aligned.compute_point_cloud_distance(target)
     distances = np.asarray(dists)
     
+    # Basic statistics
+    mean_dev = np.mean(distances)
+    max_dev = np.max(distances)
+    
     # Calculate volume difference
     source_bbox = source_aligned.get_axis_aligned_bounding_box()
     target_bbox = target.get_axis_aligned_bounding_box()
@@ -72,12 +76,11 @@ def compute_advanced_metrics(
     target_com = np.mean(np.asarray(target.points), axis=0)
     com_dist = np.linalg.norm(source_com - target_com)
     
-    # Calculate Hausdorff distance
-    hausdorff = np.max(distances)
-    
     return {
         'distances': distances,
-        'hausdorff_distance': float(hausdorff),
+        'mean_deviation': float(mean_dev),
+        'max_deviation': float(max_dev),
+        'hausdorff_distance': float(max_dev),
         'volume_difference': float(volume_diff),
         'center_of_mass_distance': float(com_dist)
     }
