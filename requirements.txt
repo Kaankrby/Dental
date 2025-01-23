@@ -1,8 +1,8 @@
 streamlit==1.29.0
-open3d-cpu==0.19.0  # Use CPU-only build
-numpy==1.26.4        # First numpy with Python 3.12 support
+open3d-cpu==0.19.0
+numpy==1.26.4
 pandas==2.2.1
 plotly==5.18.0
 scipy==1.13.0
 setuptools==70.0.0
-pybind11==2.12.0     # Required for Open3D
+pybind11==2.12.0
