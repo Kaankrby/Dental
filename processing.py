@@ -2,7 +2,7 @@ import open3d as o3d
 import numpy as np
 import streamlit as st
 from typing import Tuple, Optional, Dict, Any
-from utils import performance_monitor, validate_mesh_watertight, load_mesh, sample_point_cloud
+from utils import performance_monitor
 
 class STLAnalyzer:
     def __init__(self):
@@ -11,12 +11,13 @@ class STLAnalyzer:
         self.reference_bbox = None
         self.test_meshes = {}
         self.results = {}
-        
+
     @performance_monitor
     def load_reference(self, file_path: str, num_points: int, nb_neighbors: int, std_ratio: float):
         """Load and process reference STL file."""
+        from utils import load_mesh, sample_point_cloud
+        
         self.reference_mesh = load_mesh(file_path)
-        validate_mesh_watertight(self.reference_mesh)
         self.reference_pcd = sample_point_cloud(
             self.reference_mesh,
             num_points,
@@ -24,59 +25,42 @@ class STLAnalyzer:
             std_ratio
         )
         self.reference_bbox = self.reference_pcd.get_axis_aligned_bounding_box()
-        self._precompute_reference_features()
-        
-    def _precompute_reference_features(self) -> None:
-        """Precompute features for faster comparisons."""
-        self.reference_kdtree = o3d.geometry.KDTreeFlann(self.reference_pcd)
-        self.reference_normals = np.asarray(self.reference_pcd.normals)
-        
+
     @performance_monitor
-    def add_test_file(self, file_path: str, num_points: int,
-                     nb_neighbors: int, std_ratio: float) -> None:
-        """Load and process test STL file with validation."""
+    def add_test_file(self, file_path: str, num_points: int, nb_neighbors: int, std_ratio: float):
+        """Load and process a test STL file."""
         from utils import load_mesh, sample_point_cloud
-        
+
         mesh = load_mesh(file_path)
-        validate_mesh_watertight(mesh)  # New validation
-        
         pcd = sample_point_cloud(mesh, num_points, nb_neighbors, std_ratio)
         self.test_meshes[file_path] = {
             'mesh': mesh,
-            'pcd': pcd,
-            'kdtree': o3d.geometry.KDTreeFlann(pcd),  # Precompute KDTree
-            'normals': np.asarray(pcd.normals)
+            'pcd': pcd
         }
-        
+
     @performance_monitor
     def prepare_for_global_registration(
         self,
         pcd: o3d.geometry.PointCloud,
         voxel_size: float
     ) -> Tuple[o3d.geometry.PointCloud, o3d.pipelines.registration.Feature]:
-        """Optimized feature preparation with adaptive parameters."""
-        # Adaptive parameters based on voxel size
-        pcd_down = pcd.voxel_down_sample(voxel_size=max(voxel_size, 0.1))
-        
-        radius_normals = 2.5 * voxel_size
+        """Prepare point cloud for global registration."""
+        pcd_down = pcd.voxel_down_sample(voxel_size=voxel_size)
         pcd_down.estimate_normals(
             search_param=o3d.geometry.KDTreeSearchParamHybrid(
-                radius=radius_normals,
-                max_nn=min(50, int(len(pcd_down.points)*0.1))
+                radius=2.0*voxel_size,
+                max_nn=30
             )
         )
-        
-        # Optimized FPFH parameters
-        radius_feature = 5.0 * voxel_size
         fpfh = o3d.pipelines.registration.compute_fpfh_feature(
             pcd_down,
             o3d.geometry.KDTreeSearchParamHybrid(
-                radius=radius_feature,
-                max_nn=min(100, len(pcd_down.points))
+                radius=5.0*voxel_size,
+                max_nn=100
             )
         )
         return pcd_down, fpfh
-        
+
     @performance_monitor
     def global_registration(
         self,
@@ -84,32 +68,25 @@ class STLAnalyzer:
         target: o3d.geometry.PointCloud,
         voxel_size: float
     ) -> np.ndarray:
-        """Optimized global registration with adaptive RANSAC."""
+        """Perform global registration using RANSAC."""
         source_down, source_fpfh = self.prepare_for_global_registration(source, voxel_size)
         target_down, target_fpfh = self.prepare_for_global_registration(target, voxel_size)
-        
-        # Adaptive parameters based on point cloud size
-        n_points = min(len(source_down.points), len(target_down.points))
-        ransac_n = max(3, min(6, int(n_points * 0.001)))
-        
+
         result = o3d.pipelines.registration.registration_ransac_based_on_feature_matching(
             source_down, target_down,
             source_fpfh, target_fpfh,
             mutual_filter=True,
             max_correspondence_distance=voxel_size * 1.5,
             estimation_method=o3d.pipelines.registration.TransformationEstimationPointToPoint(False),
-            ransac_n=ransac_n,
+            ransac_n=4,
             checkers=[
                 o3d.pipelines.registration.CorrespondenceCheckerBasedOnEdgeLength(0.9),
-                o3d.pipelines.registration.CorrespondenceCheckerBasedOnDistance(voxel_size * 1.5),
-                o3d.pipelines.registration.CorrespondenceCheckerBasedOnNormal(
-                    np.deg2rad(15)  # New normal consistency check
-                )
+                o3d.pipelines.registration.CorrespondenceCheckerBasedOnDistance(voxel_size * 1.5)
             ],
-            criteria=o3d.pipelines.registration.RANSACConvergenceCriteria(500000, 0.999)
+            criteria=o3d.pipelines.registration.RANSACConvergenceCriteria(4000000, 500)
         )
         return result.transformation
-        
+
     @performance_monitor
     def refine_registration(
         self,
@@ -119,18 +96,15 @@ class STLAnalyzer:
         threshold: float,
         max_iter: int
     ) -> o3d.pipelines.registration.RegistrationResult:
-        """Enhanced ICP with normal compatibility check."""
-        return o3d.pipelines.registration.registration_icp(
+        """Refine registration using ICP."""
+        result = o3d.pipelines.registration.registration_icp(
             source, target,
             threshold, init_transform,
-            estimation_method=o3d.pipelines.registration.TransformationEstimationPointToPlane(),
-            criteria=o3d.pipelines.registration.ICPConvergenceCriteria(
-                max_iteration=max_iter,
-                relative_fitness=1e-6,
-                relative_rmse=1e-6
-            )
+            o3d.pipelines.registration.TransformationEstimationPointToPoint(),
+            o3d.pipelines.registration.ICPConvergenceCriteria(max_iteration=max_iter)
         )
-        
+        return result
+
     @performance_monitor
     def process_test_file(
         self,
@@ -140,115 +114,54 @@ class STLAnalyzer:
         icp_threshold: float,
         max_iter: int,
         ignore_outside_bbox: bool
-    ) -> Dict[str, Any]:
-        """Enhanced processing with additional metrics and validation."""
+    ) -> Dict:
+        """Process a single test file and compute metrics."""
         if self.reference_pcd is None:
             raise ValueError("Reference not loaded")
-            
+
         test_data = self.test_meshes[file_path]
         test_pcd = test_data['pcd']
-        
-        # Multi-stage registration
+
+        # Initial alignment
         transform_init = np.eye(4)
         if use_global_reg:
-            with st.spinner("Global registration..."):
-                transform_init = self.global_registration(
-                    test_pcd, self.reference_pcd, voxel_size
-                )
-        
-        # Multi-resolution ICP
-        with st.spinner("ICP refinement..."):
-            icp_result = self.refine_registration(
-                test_pcd, self.reference_pcd,
-                transform_init, icp_threshold, max_iter
+            transform_init = self.global_registration(
+                test_pcd,
+                self.reference_pcd,
+                voxel_size
             )
-        
+
+        # ICP refinement
+        icp_result = self.refine_registration(
+            test_pcd,
+            self.reference_pcd,
+            transform_init,
+            icp_threshold,
+            max_iter
+        )
+
+        # Transform test point cloud
         test_aligned = test_pcd.transform(icp_result.transformation)
-        
+
+        # Filter points if needed
         if ignore_outside_bbox:
             indices = self.reference_bbox.get_point_indices_within_bounding_box(
                 test_aligned.points
             )
             test_aligned = test_aligned.select_by_index(indices)
-            if len(indices) == 0:
-                raise ValueError("No points remaining after bbox filtering")
-                
-        # Enhanced metrics calculation
-        metrics = compute_advanced_metrics(
-            test_aligned, 
-            self.reference_pcd,
-            self.reference_kdtree,
-            self.reference_normals
-        )
-        
+
+        # Compute metrics
+        from utils import compute_advanced_metrics
+        metrics = compute_advanced_metrics(test_aligned, self.reference_pcd)
         metrics.update({
             'fitness': icp_result.fitness,
             'inlier_rmse': icp_result.inlier_rmse,
             'transformation': icp_result.transformation
         })
-        
+
         self.results[file_path] = {
             'metrics': metrics,
             'aligned_pcd': test_aligned
         }
-        
-        return self.results[file_path]
 
-def compute_advanced_metrics(
-    source_aligned: o3d.geometry.PointCloud,
-    target: o3d.geometry.PointCloud,
-    target_kdtree: o3d.geometry.KDTreeFlann,
-    target_normals: np.ndarray
-) -> Dict[str, Any]:
-    """Compute comparison metrics between point clouds."""
-    metrics = {}
-    
-    try:
-        # Calculate point-to-point distances
-        distances = []
-        source_points = np.asarray(source_aligned.points)
-        target_points = np.asarray(target.points)
-        
-        for point in source_points:
-            k, idx, dist = target_kdtree.search_knn_vector_3d(point, 1)
-            distances.append(np.sqrt(dist[0]))
-        
-        distances = np.array(distances)
-        
-        # Basic statistics
-        metrics["mean_deviation"] = float(np.mean(distances))
-        metrics["max_deviation"] = float(np.max(distances))
-        metrics["std_deviation"] = float(np.std(distances))
-        metrics["distances"] = distances
-        
-        # Bounding box volume comparison
-        source_bbox = source_aligned.get_axis_aligned_bounding_box()
-        target_bbox = target.get_axis_aligned_bounding_box()
-        source_vol = np.prod(source_bbox.get_extent())
-        target_vol = np.prod(target_bbox.get_extent())
-        metrics["volume_similarity"] = min(source_vol, target_vol) / max(source_vol, target_vol)
-        
-        # Center of mass difference
-        source_com = np.mean(source_points, axis=0)
-        target_com = np.mean(target_points, axis=0)
-        metrics["center_of_mass_distance"] = float(np.linalg.norm(source_com - target_com))
-        
-        # Normal angle analysis (if normals available)
-        source_normals = np.asarray(source_aligned.normals)
-        normal_dots = np.abs(np.sum(source_normals * target_normals[idx], axis=1))
-        metrics["mean_normal_angle"] = float(np.rad2deg(np.arccos(np.clip(np.mean(normal_dots), -1.0, 1.0))))
-        
-        return metrics
-        
-    except Exception as e:
-        st.error(f"Error computing metrics: {str(e)}")
-        return {
-            "error": str(e),
-            "mean_deviation": 0.0,
-            "max_deviation": 0.0,
-            "std_deviation": 0.0,
-            "volume_similarity": 0.0,
-            "center_of_mass_distance": 0.0,
-            "mean_normal_angle": 0.0,
-            "distances": np.array([])
-        }
+        return self.results[file_path]
