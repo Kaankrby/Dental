@@ -1,8 +1,8 @@
 streamlit==1.29.0
-open3d==0.19.0
-numpy==1.24.3
-pandas==2.0.3
+open3d==0.17.0  # Streamlit-compatible version
+numpy==1.26.4    # First Python 3.12-compatible release
+pandas==2.2.1
 plotly==5.18.0
-scipy==1.11.4
-trimesh==4.0.5
-pyvista==0.43.1
+scipy==1.13.0
+setuptools==70.0.0
+pybind11==2.12.0  # Required for Open3D
