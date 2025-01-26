@@ -1,3 +1,8 @@
+import sys
+if sys.version_info >= (3, 10):
+    import collections.abc
+    sys.modules['collections'].Mapping = collections.abc.Mapping
+
 import streamlit as st
 import numpy as np
 import pandas as pd
