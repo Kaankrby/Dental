@@ -3,7 +3,7 @@ import numpy as np
 import pandas as pd
 import tempfile
 import os
-from processing import STLAnalyzer
+from processing import STLAnalyzer, RhinoAnalyzer
 from visualization import (
     plot_point_cloud_heatmap, 
     plot_multiple_point_clouds,
@@ -12,6 +12,7 @@ from visualization import (
 )
 from utils import validate_file_name
 from streamlit.runtime.scriptrunner import get_script_run_ctx
+import open3d as o3d
 
 # -------------------------------------------------
 # Configuration
@@ -115,6 +116,48 @@ with st.expander("📤 Upload Files", expanded=True):
             accept_multiple_files=True,
             key="test_uploader"
         )
+
+# Layer weight configuration
+LAYER_WEIGHTS = {
+    "NOTIMPORTANT": 0.1,
+    "Layer1": 0.4,
+    "Layer2": 1.0,
+    "BaseLayer": 1.0  # Example additional layer
+}
+
+def main():
+    st.title("3DM Weighted Deviation Analyzer")
+    
+    # File upload
+    ref_file = st.file_uploader("Upload Reference .3dm", type=["3dm"])
+    test_file = st.file_uploader("Upload Test STL", type=["stl"])
+    
+    if ref_file and test_file:
+        # Save uploaded files
+        ref_path = save_uploaded_file(ref_file)
+        test_path = save_uploaded_file(test_file)
+        
+        # Initialize analyzer with weights
+        analyzer = RhinoAnalyzer(LAYER_WEIGHTS)
+        analyzer.load_reference_3dm(ref_path)
+        
+        # Process test file
+        test_mesh = o3d.io.read_triangle_mesh(test_path)
+        test_pcd = test_mesh.sample_points_uniformly(10000)
+        test_points = np.asarray(test_pcd.points)
+        
+        # Calculate deviations
+        results = analyzer.calculate_weighted_deviation(test_points)
+        
+        # Display results
+        col1, col2 = st.columns(2)
+        with col1:
+            st.metric("Mean Raw Deviation", f"{results['mean_raw']:.3f} mm")
+            st.metric("Max Raw Deviation", f"{results['max_raw']:.3f} mm")
+        with col2:
+            st.metric("Mean Weighted Deviation", f"{results['mean_weighted']:.3f} mm", 
+                    delta=f"{(results['mean_weighted']-results['mean_raw']):.3f} vs raw")
+            st.metric("Max Weighted Deviation", f"{results['max_weighted']:.3f} mm")
 
 # Analysis Execution
 if st.button("🚀 Start Analysis", type="primary"):

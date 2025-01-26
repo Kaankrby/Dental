@@ -3,6 +3,7 @@ import numpy as np
 import streamlit as st
 from typing import Tuple, Optional, Dict, Any
 from utils import performance_monitor
+import rhino3dm as rh
 
 class STLAnalyzer:
     def __init__(self):
@@ -141,8 +142,7 @@ class STLAnalyzer:
         )
 
         # Transform test point cloud
-        test_aligned = test_pcd.clone()
-        test_aligned.transform(icp_result.transformation)
+        test_aligned = test_pcd.transform(icp_result.transformation)
 
         # Filter points if needed
         if ignore_outside_bbox:
@@ -153,12 +153,7 @@ class STLAnalyzer:
 
         # Compute metrics
         from utils import compute_advanced_metrics
-        metrics = compute_advanced_metrics(
-            test_aligned,
-            self.reference_pcd,
-            source_mesh=test_data.get('mesh'),
-            target_mesh=self.reference_mesh
-        )
+        metrics = compute_advanced_metrics(test_aligned, self.reference_pcd)
         metrics.update({
             'fitness': icp_result.fitness,
             'inlier_rmse': icp_result.inlier_rmse,
@@ -171,3 +166,65 @@ class STLAnalyzer:
         }
 
         return self.results[file_path]
+
+class RhinoAnalyzer:
+    def __init__(self, layer_weights: dict):
+        self.layer_weights = layer_weights
+        self.reference = None  # Will store weighted point cloud
+        
+    def load_reference_3dm(self, file_path: str):
+        """Load Rhino .3dm file with layered meshes"""
+        model = rh.File3dm.Read(file_path)
+        
+        # Collect all meshes with layer weights
+        weighted_points = []
+        for obj in model.Objects:
+            if isinstance(obj.Geometry, rh.Mesh):
+                mesh = obj.Geometry
+                layer = model.Layers.FindIndex(obj.Attributes.LayerIndex)
+                weight = self.layer_weights.get(layer.Name, 1.0)
+                
+                # Extract vertices with weights
+                vertices = np.array([[v.X, v.Y, v.Z] for v in mesh.Vertices])
+                weights = np.full((len(vertices), 1), weight)
+                weighted_vertices = np.hstack((vertices, weights))
+                
+                weighted_points.append(weighted_vertices)
+        
+        # Create combined weighted point cloud
+        all_points = np.vstack(weighted_points)
+        self.reference = o3d.geometry.PointCloud()
+        self.reference.points = o3d.utility.Vector3dVector(all_points[:, :3])
+        self.reference.normals = o3d.utility.Vector3dVector(np.zeros((len(all_points), 3))) 
+        self.reference.colors = o3d.utility.Vector3dVector(
+            np.tile(all_points[:, 3:], (1, 3))  # Weight as RGB color
+        )
+        
+        # Build KDTree for fast lookups
+        self.kdtree = o3d.geometry.KDTreeFlann(self.reference)
+
+    def calculate_weighted_deviation(self, test_points: np.ndarray) -> dict:
+        """Calculate weighted deviations against reference"""
+        deviations = []
+        weighted_deviations = []
+        
+        for point in test_points:
+            # Find nearest 3 reference points
+            _, idxs, dists = self.kdtree.search_knn_vector_3d(point, 3)
+            
+            # Calculate weighted distance
+            weights = np.array([self.reference.colors[id][0] for id in idxs])
+            weighted_dists = np.array(dists) * weights
+            weighted_dev = np.mean(weighted_dists)
+            
+            deviations.append(np.mean(dists))
+            weighted_deviations.append(weighted_dev)
+            
+        return {
+            'raw_deviations': np.array(deviations),
+            'weighted_deviations': np.array(weighted_deviations),
+            'mean_raw': np.mean(deviations),
+            'mean_weighted': np.mean(weighted_deviations),
+            'max_raw': np.max(deviations),
+            'max_weighted': np.max(weighted_deviations)
+        }
