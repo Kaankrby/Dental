@@ -174,6 +174,20 @@ def main():
                     delta=f"{(results['mean_weighted']-results['mean_raw']):.3f} vs raw")
             st.metric("Max Weighted Deviation", f"{results['max_weighted']:.3f} mm")
 
+        with st.expander("🩺 Mesh Diagnostics"):
+            col1, col2 = st.columns(2)
+            with col1:
+                st.write("**Reference .3dm Structure**")
+                st.json({
+                    "Layers": list(LAYER_WEIGHTS.keys()),
+                    "Loaded Layers": list(analyzer.reference_layers.keys())
+                })
+            with col2:
+                st.write("**Test Mesh Statistics**")
+                st.metric("Vertices", len(test_mesh.vertices))
+                st.metric("Triangles", len(test_mesh.triangles))
+                st.metric("Watertight", test_mesh.is_watertight())
+
 # Analysis Execution
 if st.button("🚀 Start Analysis", type="primary"):
     if not ref_file:

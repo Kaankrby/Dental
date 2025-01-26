@@ -32,20 +32,41 @@ def load_mesh(stl_path: str) -> o3d.geometry.TriangleMesh:
         
         mesh = o3d.io.read_triangle_mesh(stl_path)
         
-        # Add mesh repair steps
+        # Detailed diagnostics
+        stats = {
+            'original_vertices': len(mesh.vertices),
+            'original_triangles': len(mesh.triangles)
+        }
+        
+        # Aggressive repair steps
+        mesh = mesh.remove_duplicated_vertices()
+        mesh = mesh.remove_degenerate_triangles()
+        mesh = mesh.remove_non_manifold_edges()
+        mesh = mesh.merge_close_vertices(0.5)  # Merge vertices within 0.5mm
+        
+        # Fallback triangulation
         if not mesh.has_triangles():
-            mesh = mesh.compute_vertex_normals()  # Try to generate normals
-            mesh = mesh.merge_close_vertices(0.1)  # Merge overlapping vertices
-            mesh = mesh.remove_degenerate_triangles()
-            mesh = mesh.remove_duplicated_triangles()
+            mesh = mesh.compute_vertex_normals()
+            mesh = mesh.triangulate()
             
+        stats.update({
+            'repaired_vertices': len(mesh.vertices),
+            'repaired_triangles': len(mesh.triangles)
+        })
+        
         if not mesh.has_triangles():
-            raise ValueError("Mesh repair failed - no valid triangles")
-        
+            raise ValueError(f"""
+            Final mesh validation failed  
+            Diagnostics: {stats}  
+            File may contain:  
+            - Non-manifold geometry  
+            - Degenerate surfaces  
+            - Invalid topology
+            """)
+            
         return mesh
-        
     except Exception as e:
-        st.error(f"Mesh Error: {str(e)}")
+        st.error(str(e))
         raise
 
 def sample_point_cloud(
