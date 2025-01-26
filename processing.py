@@ -183,16 +183,19 @@ class RhinoAnalyzer:
         
         for obj in model.Objects:
             if isinstance(obj.Geometry, rh.Mesh):
-                mesh = obj.Geometry
+                rh_mesh = obj.Geometry
                 layer = model.Layers.FindIndex(obj.Attributes.LayerIndex)
                 weight = self.layer_weights.get(layer.Name, 1.0)
                 
-                # Directly use vertices
-                vertices = np.array([[v.X, v.Y, v.Z] for v in mesh.Vertices])
+                # Direct vertex extraction
+                vertices = np.array([[v.X, v.Y, v.Z] for v in rh_mesh.Vertices])
                 weights = np.full((len(vertices), 1), weight)
                 weighted_points.append(np.hstack((vertices, weights)))
         
-        # Combine all layers
+        # Combine all points
+        if not weighted_points:
+            raise ValueError("No valid meshes found in .3dm file")
+        
         all_points = np.vstack(weighted_points)
         self.reference = o3d.geometry.PointCloud()
         self.reference.points = o3d.utility.Vector3dVector(all_points[:, :3])
