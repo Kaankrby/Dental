@@ -15,16 +15,30 @@ class STLAnalyzer:
         self.results = {}
 
     @performance_monitor
-    def load_reference(self, file_path: str, num_points: int, nb_neighbors: int, std_ratio: float):
-        """Load and process reference STL file."""
-        self.reference_mesh = load_mesh(file_path)
-        self.reference_pcd = sample_point_cloud(
-            self.reference_mesh,
-            num_points,
-            nb_neighbors,
-            std_ratio
-        )
-        self.reference_bbox = self.reference_pcd.get_axis_aligned_bounding_box()
+    def load_reference(self, file_path: str, num_points: int, layers: int, voxel_size: float):
+        """Load reference as merged point cloud"""
+        # Store parameters
+        self.voxel_size = voxel_size
+        self.num_layers = layers
+        
+        # Load as single merged cloud
+        raw_pcd = load_mesh(file_path)
+        self.reference_full = raw_pcd
+        
+        # Direct sampling
+        points = np.asarray(raw_pcd.points)
+        if len(points) > num_points:
+            indices = np.random.choice(len(points), num_points, replace=False)
+            sampled_points = points[indices]
+        else:
+            sampled_points = points
+            
+        # Create sampled point cloud
+        self.reference_pcd = o3d.geometry.PointCloud()
+        self.reference_pcd.points = o3d.utility.Vector3dVector(sampled_points)
+        
+        st.info(f"Loaded reference with {len(sampled_points)} points")
+        return self.reference_pcd
 
     @performance_monitor
     def add_test_file(self, file_path: str, num_points: int, nb_neighbors: int, std_ratio: float):
@@ -173,6 +187,7 @@ class RhinoAnalyzer:
         """Update weights from UI"""
         self.layer_weights = weights
         
+    @performance_monitor
     def load_reference(self, file_path: str, num_points: int, layers: int, voxel_size: float):
         """Load reference as merged point cloud"""
         # Store parameters
@@ -183,7 +198,7 @@ class RhinoAnalyzer:
         raw_pcd = load_mesh(file_path)
         self.reference_full = raw_pcd
         
-        # Direct sampling without calling sample_point_cloud
+        # Direct sampling
         points = np.asarray(raw_pcd.points)
         if len(points) > num_points:
             indices = np.random.choice(len(points), num_points, replace=False)
@@ -197,7 +212,21 @@ class RhinoAnalyzer:
         
         st.info(f"Loaded reference with {len(sampled_points)} points")
         return self.reference_pcd
+
+    @performance_monitor
+    def load_target(self, file_path: str):
+        """Load target file"""
+        # Direct loading without sampling
+        target_pcd = load_mesh(file_path)
+        points = np.asarray(target_pcd.points)
         
+        # Create point cloud
+        self.target_pcd = o3d.geometry.PointCloud()
+        self.target_pcd.points = o3d.utility.Vector3dVector(points)
+        
+        st.info(f"Loaded target with {len(points)} points")
+        return self.target_pcd
+
     def analyze_with_layers(self, target_pcd: o3d.geometry.PointCloud, transformation: np.ndarray):
         """Second stage: Detailed analysis using layers"""
         # Apply initial transformation

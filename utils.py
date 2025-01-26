@@ -28,6 +28,7 @@ def performance_monitor(func):
             st.info(f"{func.__name__} took {end_time - start_time:.2f} seconds")
     return wrapper
 
+@performance_monitor
 def load_mesh(stl_path: str) -> o3d.geometry.PointCloud:
     """Load mesh as single merged point cloud"""
     try:
@@ -85,46 +86,6 @@ def load_ascii_stl(path: str) -> o3d.geometry.PointCloud:
     pcd = o3d.geometry.PointCloud()
     pcd.points = o3d.utility.Vector3dVector(np.unique(vertices, axis=0))
     return pcd
-
-@performance_monitor
-def sample_point_cloud(pcd: o3d.geometry.PointCloud, num_points: int) -> o3d.geometry.PointCloud:
-    """Sample points from point cloud to target count"""
-    if not isinstance(pcd, o3d.geometry.PointCloud):
-        raise TypeError("Input must be an Open3D PointCloud")
-        
-    st.info(f"Sampling {num_points} points from cloud of size {len(pcd.points)}")
-    
-    # Handle empty or small point clouds
-    if len(pcd.points) <= num_points:
-        return pcd
-        
-    # Safe volume calculation
-    bbox = pcd.get_axis_aligned_bounding_box()
-    extent = bbox.get_extent()
-    volume = float(extent[0] * extent[1] * extent[2])
-    
-    # Safe voxel size calculation
-    voxel_size = float((volume / num_points) ** (1/3))
-    
-    try:
-        downsampled = pcd.voxel_down_sample(voxel_size=voxel_size)
-        if not downsampled or len(downsampled.points) == 0:
-            st.warning("Voxel downsampling failed, using original cloud")
-            downsampled = pcd
-            
-        # Final random sampling if needed
-        if len(downsampled.points) > num_points:
-            points = np.asarray(downsampled.points, dtype=np.float64)
-            indices = np.random.choice(len(points), num_points, replace=False)
-            result = o3d.geometry.PointCloud()
-            result.points = o3d.utility.Vector3dVector(points[indices])
-            return result
-            
-        return downsampled
-        
-    except Exception as e:
-        st.error(f"Error during point cloud sampling: {str(e)}")
-        raise
 
 def compute_advanced_metrics(
     source_aligned: o3d.geometry.PointCloud,
