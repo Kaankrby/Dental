@@ -31,13 +31,21 @@ def load_mesh(stl_path: str) -> o3d.geometry.TriangleMesh:
             raise ValueError(f"File exceeds size limit ({file_size/1e6:.1f}MB > {max_size/1e6}MB)")
         
         mesh = o3d.io.read_triangle_mesh(stl_path)
+        
+        # Add mesh repair steps
         if not mesh.has_triangles():
-            raise ValueError("Invalid mesh: No triangles found")
+            mesh = mesh.compute_vertex_normals()  # Try to generate normals
+            mesh = mesh.merge_close_vertices(0.1)  # Merge overlapping vertices
+            mesh = mesh.remove_degenerate_triangles()
+            mesh = mesh.remove_duplicated_triangles()
+            
+        if not mesh.has_triangles():
+            raise ValueError("Mesh repair failed - no valid triangles")
         
         return mesh
         
     except Exception as e:
-        st.error(f"Error loading mesh: {str(e)}")
+        st.error(f"Mesh Error: {str(e)}")
         raise
 
 def sample_point_cloud(

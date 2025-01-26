@@ -141,7 +141,14 @@ def main():
         try:
             analyzer.load_reference_3dm(ref_path)
         except ValueError as e:
-            st.error(f"Reference Error: {str(e)}")
+            st.error(f"""
+    **Reference File Error**  
+    {str(e)}  
+    Ensure your .3dm file:  
+    - Contains valid meshes on layers: {list(LAYER_WEIGHTS.keys())}  
+    - All meshes have proper triangle definitions  
+    - No empty layers are present
+    """)
             st.stop()
         
         # Process test file

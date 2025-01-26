@@ -176,20 +176,31 @@ class RhinoAnalyzer:
         """Load Rhino .3dm file with layered meshes"""
         model = rh.File3dm.Read(file_path)
         found_layers = set()
-        
-        # Collect all meshes with layer weights
         weighted_points = []
+        
         for obj in model.Objects:
             if isinstance(obj.Geometry, rh.Mesh):
                 mesh = obj.Geometry
                 layer = model.Layers.FindIndex(obj.Attributes.LayerIndex)
                 weight = self.layer_weights.get(layer.Name, 1.0)
                 
-                # Extract vertices with weights
-                vertices = np.array([[v.X, v.Y, v.Z] for v in mesh.Vertices])
+                # Convert Rhino mesh to Open3D format
+                o3d_mesh = o3d.geometry.TriangleMesh()
+                o3d_mesh.vertices = o3d.utility.Vector3dVector(
+                    [[v.X, v.Y, v.Z] for v in mesh.Vertices]
+                )
+                o3d_mesh.triangles = o3d.utility.Vector3iVector(
+                    [[f.A, f.B, f.C] for f in mesh.Faces]
+                )
+                
+                # Validate mesh
+                if not o3d_mesh.has_triangles():
+                    raise ValueError(f"Layer {layer.Name} has invalid triangles")
+                    
+                # Process valid mesh
+                vertices = np.asarray(o3d_mesh.vertices)
                 weights = np.full((len(vertices), 1), weight)
                 weighted_vertices = np.hstack((vertices, weights))
-                
                 weighted_points.append(weighted_vertices)
         
         # Create combined weighted point cloud
