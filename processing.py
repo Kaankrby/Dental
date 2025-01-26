@@ -176,42 +176,33 @@ class RhinoAnalyzer:
         """Load Rhino .3dm file with layered meshes"""
         model = rh.File3dm.Read(file_path)
         found_layers = set()
-        weighted_points = []
         
+        # Collect all meshes with layer weights
+        weighted_points = []
         for obj in model.Objects:
             if isinstance(obj.Geometry, rh.Mesh):
                 mesh = obj.Geometry
                 layer = model.Layers.FindIndex(obj.Attributes.LayerIndex)
                 weight = self.layer_weights.get(layer.Name, 1.0)
                 
-                # Convert Rhino mesh to triangles
+                # Convert Rhino mesh to Open3D format
                 o3d_mesh = o3d.geometry.TriangleMesh()
-                vertices = [[v.X, v.Y, v.Z] for v in mesh.Vertices]
-                
-                # Extract and triangulate faces
-                triangles = []
-                for face in mesh.Faces:
-                    if face.IsQuad:
-                        # Split quad into two triangles
-                        triangles.append([face.A, face.B, face.C])
-                        triangles.append([face.A, face.C, face.D])
-                    else:
-                        triangles.append([face.A, face.B, face.C])
-                
-                if not triangles:
-                    raise ValueError(f"Layer {layer.Name} has no valid faces")
-                    
-                o3d_mesh.vertices = o3d.utility.Vector3dVector(vertices)
-                o3d_mesh.triangles = o3d.utility.Vector3iVector(triangles)
+                o3d_mesh.vertices = o3d.utility.Vector3dVector(
+                    [[v.X, v.Y, v.Z] for v in mesh.Vertices]
+                )
+                o3d_mesh.triangles = o3d.utility.Vector3iVector(
+                    [[f.A, f.B, f.C] for f in mesh.Faces]
+                )
                 
                 # Validate mesh
-                if len(o3d_mesh.triangles) == 0:
-                    raise ValueError(f"Layer {layer.Name} failed triangulation")
-                
+                if not o3d_mesh.has_triangles():
+                    raise ValueError(f"Layer {layer.Name} has invalid triangles")
+                    
                 # Process valid mesh
                 vertices = np.asarray(o3d_mesh.vertices)
                 weights = np.full((len(vertices), 1), weight)
                 weighted_vertices = np.hstack((vertices, weights))
+                
                 weighted_points.append(weighted_vertices)
         
         # Create combined weighted point cloud

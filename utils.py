@@ -32,41 +32,29 @@ def load_mesh(stl_path: str) -> o3d.geometry.TriangleMesh:
         
         mesh = o3d.io.read_triangle_mesh(stl_path)
         
-        # Detailed diagnostics
-        stats = {
-            'original_vertices': len(mesh.vertices),
-            'original_triangles': len(mesh.triangles)
-        }
-        
-        # Aggressive repair steps
-        mesh = mesh.remove_duplicated_vertices()
-        mesh = mesh.remove_degenerate_triangles()
+        # Remove non-triangular faces
         mesh = mesh.remove_non_manifold_edges()
-        mesh = mesh.merge_close_vertices(0.5)  # Merge vertices within 0.5mm
+        mesh = mesh.remove_degenerate_triangles()
+        mesh = mesh.remove_duplicated_triangles()
         
-        # Fallback triangulation
+        # New: Explicit check for triangular faces
         if not mesh.has_triangles():
-            mesh = mesh.compute_vertex_normals()
-            mesh = mesh.triangulate()
+            # Get face information
+            triangles = np.asarray(mesh.triangles)
+            if len(triangles) == 0:
+                raise ValueError("Mesh contains no faces")
+                
+            # Check for quad faces
+            quad_faces = [f for f in triangles if len(f) > 3]
+            if quad_faces:
+                raise ValueError(f"Mesh contains {len(quad_faces)} quad/ngon faces - only triangles supported")
             
-        stats.update({
-            'repaired_vertices': len(mesh.vertices),
-            'repaired_triangles': len(mesh.triangles)
-        })
-        
-        if not mesh.has_triangles():
-            raise ValueError(f"""
-            Final mesh validation failed  
-            Diagnostics: {stats}  
-            File may contain:  
-            - Non-manifold geometry  
-            - Degenerate surfaces  
-            - Invalid topology
-            """)
-            
+            # Final fallback
+            raise ValueError("Mesh contains invalid triangular definitions")
+
         return mesh
     except Exception as e:
-        st.error(str(e))
+        st.error(f"Mesh Error: {str(e)}")
         raise
 
 def sample_point_cloud(
