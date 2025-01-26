@@ -11,7 +11,7 @@ from visualization import (
     plot_normal_angle_distribution,
     plot_rhino_model
 )
-from utils import validate_file_name
+from utils import validate_file_name, save_uploaded_file, validate_3dm_file, validate_stl_file
 from streamlit.runtime.scriptrunner import get_script_run_ctx
 import open3d as o3d
 import rhino3dm as rh
