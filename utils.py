@@ -65,8 +65,26 @@ def load_mesh(stl_path: str) -> o3d.geometry.PointCloud:
         return pcd
 
     except Exception as e:
-        st.error(f"STL Load Error: {str(e)}")
-        raise ValueError from e
+        # Final fallback: raw point cloud assumption
+        st.warning("""⚠️ Using raw point cloud fallback.
+                   This file may be vertex-only or use non-standard encoding""")
+        
+        # Read all 32-bit floats regardless of structure
+        with open(stl_path, 'rb') as f:
+            raw_data = np.frombuffer(f.read(), dtype=np.float32)
+            
+        # Extract XYZ triples (last partial triple ignored)
+        points = raw_data[:len(raw_data)//3*3].reshape(-1, 3)
+        
+        if len(points) < 3:
+            raise ValueError("Insufficient data for even single triangle")
+            
+        # Remove duplicate vertices
+        unique_points = np.unique(points, axis=0)
+        
+        pcd = o3d.geometry.PointCloud()
+        pcd.points = o3d.utility.Vector3dVector(unique_points)
+        return pcd
 
 def load_ascii_stl(path: str) -> o3d.geometry.PointCloud:
     """Handle malformed ASCII STLs"""
