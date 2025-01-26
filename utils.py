@@ -110,17 +110,45 @@ def load_ascii_stl(path: str) -> o3d.geometry.PointCloud:
     return pcd
 
 def sample_point_cloud(pcd: o3d.geometry.PointCloud, num_points: int) -> o3d.geometry.PointCloud:
-    """Safe sampling for point clouds"""
+    """Sample points from point cloud using voxel grid"""
+    st.info(f"Sampling {num_points} points from cloud of size {len(pcd.points)}")
+    
+    # If we have fewer points than requested, return as is
     if len(pcd.points) <= num_points:
+        st.warning(f"Point cloud has fewer points ({len(pcd.points)}) than requested ({num_points})")
         return pcd
+        
+    # Calculate voxel size for approximate point count
+    bbox = pcd.get_axis_aligned_bounding_box()
+    bbox_size = bbox.get_extent()
     
-    # Uniform downsampling first
-    downsampled = pcd.uniform_down_sample(every_k_points=len(pcd.points)//num_points)
+    # Estimate initial voxel size
+    volume = np.prod(bbox_size)
+    voxel_size = (volume / num_points) ** (1/3)
     
-    # Random sampling if needed
+    # Iteratively adjust voxel size to get closer to target point count
+    max_iterations = 10
+    for i in range(max_iterations):
+        downsampled = pcd.voxel_down_sample(voxel_size=voxel_size)
+        current_points = len(downsampled.points)
+        
+        st.info(f"Iteration {i+1}: got {current_points} points with voxel size {voxel_size:.6f}")
+        
+        # Check if we're close enough
+        if abs(current_points - num_points) < num_points * 0.1:  # Within 10%
+            return downsampled
+            
+        # Adjust voxel size based on ratio
+        voxel_size *= (current_points / num_points) ** (1/3)
+        
+    # If we couldn't get exact count, do final random sampling
     if len(downsampled.points) > num_points:
-        indices = np.random.choice(len(downsampled.points), num_points, replace=False)
-        return downsampled.select_by_index(indices)
+        points = np.asarray(downsampled.points)
+        indices = np.random.choice(len(points), num_points, replace=False)
+        result = o3d.geometry.PointCloud()
+        result.points = o3d.utility.Vector3dVector(points[indices])
+        return result
+        
     return downsampled
 
 def compute_advanced_metrics(
