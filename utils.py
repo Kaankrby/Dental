@@ -20,26 +20,17 @@ def performance_monitor(func):
 
 def load_mesh(stl_path: str) -> o3d.geometry.PointCloud:
     try:
-        # Try both point cloud and mesh formats
-        pcd = o3d.io.read_point_cloud(stl_path)
-        if pcd.has_points():
-            return pcd
-            
-        # Explicitly read as STL mesh
-        mesh = o3d.io.read_triangle_mesh(stl_path, enable_post_processing=True)
+        # Direct vertex extraction from STL
+        mesh = o3d.io.read_triangle_mesh(stl_path)
         
         if not mesh.has_vertices():
-            raise ValueError("STL file contains no readable vertices")
+            raise ValueError("STL file contains no vertices")
             
-        # Create point cloud from vertices if no faces
-        if not mesh.has_triangles():
-            pcd = o3d.geometry.PointCloud()
-            pcd.points = mesh.vertices
-            return pcd
-            
-        # Smart sampling based on mesh density
-        num_points = max(1000, len(mesh.vertices) // 10)
-        return mesh.sample_points_uniformly(num_points)
+        # Create point cloud directly from mesh vertices
+        pcd = o3d.geometry.PointCloud()
+        pcd.points = mesh.vertices
+        
+        return pcd
         
     except Exception as e:
         st.error(f"STL Load Error: {str(e)}")
