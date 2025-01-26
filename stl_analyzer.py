@@ -162,6 +162,31 @@ LAYER_WEIGHTS = {
     "BaseLayer": 1.0  # Example additional layer
 }
 
+def show_file_preview(file, title="File Preview"):
+    """Show preview of uploaded file"""
+    if file is not None:
+        col1, col2 = st.columns(2)
+        with col1:
+            st.write(f"**{title}**")
+            st.write(f"Filename: `{file.name}`")
+            st.write(f"Size: `{file.size/1024:.1f} KB`")
+            
+        with col2:
+            # Read first few bytes to determine file type
+            header = file.read(80)
+            file.seek(0)  # Reset position
+            
+            try:
+                header_text = header.decode('utf-8', errors='ignore').strip()
+                st.write("Header Preview:")
+                st.code(header_text[:40] + "..." if len(header_text) > 40 else header_text)
+            except:
+                st.write("Binary file detected")
+                
+            # Show hex preview
+            st.write("Hex Preview:")
+            st.code(header.hex()[:60] + "...")
+
 def main():
     st.title("3DM Weighted Deviation Analyzer")
     

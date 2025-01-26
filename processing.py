@@ -174,16 +174,16 @@ class RhinoAnalyzer:
         self.layer_weights = weights
         
     def load_reference(self, file_path: str, num_points: int, layers: int, voxel_size: float):
-        """First stage: Load reference as merged point cloud"""
+        """Load reference as merged point cloud"""
         # Store parameters
         self.voxel_size = voxel_size
         self.num_layers = layers
         
         # Load as single merged cloud
         raw_pcd = load_mesh(file_path)
-        self.reference_full = raw_pcd  # Store full cloud for later
+        self.reference_full = raw_pcd
         
-        # Basic sampling for alignment
+        # Direct sampling without calling sample_point_cloud
         points = np.asarray(raw_pcd.points)
         if len(points) > num_points:
             indices = np.random.choice(len(points), num_points, replace=False)
@@ -195,6 +195,7 @@ class RhinoAnalyzer:
         self.reference_pcd = o3d.geometry.PointCloud()
         self.reference_pcd.points = o3d.utility.Vector3dVector(sampled_points)
         
+        st.info(f"Loaded reference with {len(sampled_points)} points")
         return self.reference_pcd
         
     def analyze_with_layers(self, target_pcd: o3d.geometry.PointCloud, transformation: np.ndarray):
