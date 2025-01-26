@@ -111,6 +111,9 @@ def load_ascii_stl(path: str) -> o3d.geometry.PointCloud:
 
 def sample_point_cloud(pcd: o3d.geometry.PointCloud, num_points: int) -> o3d.geometry.PointCloud:
     """Sample points from point cloud to target count"""
+    if not isinstance(pcd, o3d.geometry.PointCloud):
+        raise TypeError("Input must be an Open3D PointCloud")
+        
     st.info(f"Sampling {num_points} points from cloud of size {len(pcd.points)}")
     
     if len(pcd.points) <= num_points:
@@ -121,17 +124,22 @@ def sample_point_cloud(pcd: o3d.geometry.PointCloud, num_points: int) -> o3d.geo
     volume = np.prod(bbox.get_extent())
     voxel_size = (volume / num_points) ** (1/3)
     
-    downsampled = pcd.voxel_down_sample(voxel_size=voxel_size)
-    
-    # Final random sampling if needed
-    if len(downsampled.points) > num_points:
-        points = np.asarray(downsampled.points)
-        indices = np.random.choice(len(points), num_points, replace=False)
-        result = o3d.geometry.PointCloud()
-        result.points = o3d.utility.Vector3dVector(points[indices])
-        return result
+    try:
+        downsampled = pcd.voxel_down_sample(voxel_size=voxel_size)
         
-    return downsampled
+        # Final random sampling if needed
+        if len(downsampled.points) > num_points:
+            points = np.asarray(downsampled.points)
+            indices = np.random.choice(len(points), num_points, replace=False)
+            result = o3d.geometry.PointCloud()
+            result.points = o3d.utility.Vector3dVector(points[indices])
+            return result
+            
+        return downsampled
+        
+    except Exception as e:
+        st.error(f"Error during point cloud sampling: {str(e)}")
+        raise
 
 def compute_advanced_metrics(
     source_aligned: o3d.geometry.PointCloud,
