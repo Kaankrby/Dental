@@ -28,74 +28,68 @@ def performance_monitor(func):
 
 def load_mesh(stl_path: str) -> o3d.geometry.PointCloud:
     try:
-        # Try Open3D first
-        mesh = o3d.io.read_triangle_mesh(stl_path)
-        if mesh.has_vertices():
-            pcd = o3d.geometry.PointCloud()
-            pcd.points = mesh.vertices
-            return pcd
-
-        # Enhanced binary parser with alignment tolerance
+        # Bypass header completely
         with open(stl_path, 'rb') as f:
-            header = f.read(80)
-            triangle_count = int.from_bytes(f.read(4), byteorder='little')
+            data = f.read()
             
-            # Calculate expected vs actual size
-            expected_size = 84 + (50 * triangle_count)
-            actual_size = os.path.getsize(stl_path)
+        # Detect ASCII STL
+        if b"facet normal" in data[:1024]:
+            return load_ascii_stl(stl_path)
             
-            # Handle common alignment issues
-            if actual_size != expected_size:
-                st.warning(f"""
-                    STL Alignment Warning:
-                    - Header claims: {triangle_count} triangles
-                    - Expected size: {expected_size} bytes
-                    - Actual size: {actual_size} bytes
-                    Attempting recovery...
-                """)
-                
-                # Calculate valid triangle count
-                valid_triangles = (actual_size - 84) // 50
-                if valid_triangles < 1:
-                    raise ValueError("Not enough data for even 1 triangle")
-                    
-                st.info(f"Using {valid_triangles} valid triangles from file")
-                
-            # Read validated triangles
-            vertices = []
-            for _ in range(valid_triangles):
-                try:
-                    # Read single triangle (50 bytes)
-                    data = f.read(50)
-                    if len(data) < 50:
-                        break
-                        
-                    # Extract vertices (skip normals and attributes)
-                    tri = np.frombuffer(data, dtype=np.float32)[3:12]  # Skip normal
-                    vertices.append(tri.reshape(3, 3))
-                    
-                except Exception as e:
-                    st.error(f"Corrupted triangle at position {f.tell()} - {str(e)}")
+        # Binary STL with header recovery
+        triangles = []
+        pos = 80  # Skip header
+        file_size = len(data)
+        max_reasonable = (file_size - 84) // 50
+        chunk_size = 1000
+        
+        while pos + 50 <= file_size:
+            try:
+                # Extract 3 vertices (12 floats) from 50-byte block
+                tri_data = np.frombuffer(data[pos+12:pos+50], dtype=np.float32)  # Skip normal
+                triangles.append(tri_data.reshape(3, 3))
+                pos += 50
+            except:
+                # Try to find next valid triangle
+                next_tri = data.find(b"\x00\x00\x00\x00", pos)  # Common normal pattern
+                if next_tri == -1:
                     break
-                    
-            if not vertices:
-                raise ValueError("No valid triangles found after alignment correction")
+                pos = next_tri + 4  # Skip normal
                 
-            all_vertices = np.unique(np.vstack(vertices), axis=0)
+        if not triangles:
+            raise ValueError("No triangles found with deep scan")
             
-            pcd = o3d.geometry.PointCloud()
-            pcd.points = o3d.utility.Vector3dVector(all_vertices)
-            return pcd
+        all_verts = np.unique(np.vstack(triangles), axis=0)
+        pcd = o3d.geometry.PointCloud()
+        pcd.points = o3d.utility.Vector3dVector(all_verts)
+        return pcd
 
     except Exception as e:
         st.error(f"""
-            STL Load Failed:
+            Final STL Load Failed:
             - File: {os.path.basename(stl_path)}
-            - Size: {actual_size/1e6:.2f}MB
-            - Header: {header[:20].decode('ascii', 'ignore')}
+            - Size: {len(data)/1e6:.2f}MB
+            - First bytes: {data[:20].hex()}
             - Error: {str(e)}
         """)
         raise
+
+def load_ascii_stl(path: str) -> o3d.geometry.PointCloud:
+    """Handle malformed ASCII STLs"""
+    vertices = []
+    with open(path, 'r', errors='ignore') as f:
+        for line in f:
+            if 'vertex' in line:
+                try:
+                    parts = line.strip().split()
+                    vertices.append([float(parts[1]), float(parts[2]), float(parts[3])])
+                except:
+                    continue
+    if not vertices:
+        raise ValueError("No vertices found in ASCII STL")
+    pcd = o3d.geometry.PointCloud()
+    pcd.points = o3d.utility.Vector3dVector(np.unique(vertices, axis=0))
+    return pcd
 
 def sample_point_cloud(
     mesh: o3d.geometry.TriangleMesh,
