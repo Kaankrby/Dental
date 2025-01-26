@@ -28,59 +28,58 @@ def performance_monitor(func):
 
 def load_mesh(stl_path: str) -> o3d.geometry.PointCloud:
     try:
-        # First try Open3D's fast path
+        # Try Open3D first
         mesh = o3d.io.read_triangle_mesh(stl_path)
         if mesh.has_vertices():
             pcd = o3d.geometry.PointCloud()
             pcd.points = mesh.vertices
             return pcd
 
-        # Fallback: Direct binary parsing with safety limits
+        # Enhanced binary parser with alignment tolerance
         with open(stl_path, 'rb') as f:
             header = f.read(80)
-            raw_triangle_count = f.read(4)
+            triangle_count = int.from_bytes(f.read(4), byteorder='little')
             
-            # Validate realistic file size
-            file_size = os.path.getsize(stl_path)
-            max_reasonable = 500 * 1024 * 1024  # 500MB
-            if file_size > max_reasonable:
-                raise ValueError(f"File size {file_size/1e6:.1f}MB exceeds safety limit")
-                
-            # Calculate actual triangle capacity
-            bytes_per_triangle = 50  # 12 floats (4 bytes each) + 2 byte attr
-            max_triangles = (file_size - 84) // bytes_per_triangle  # 84=header
+            # Calculate expected vs actual size
+            expected_size = 84 + (50 * triangle_count)
+            actual_size = os.path.getsize(stl_path)
             
-            # Validate file alignment
-            expected_size = 84 + (50 * max_triangles)
-            if (file_size - 84) % 50 != 0:
-                raise ValueError("Invalid STL file alignment (corrupted?)")
+            # Handle common alignment issues
+            if actual_size != expected_size:
+                st.warning(f"""
+                    STL Alignment Warning:
+                    - Header claims: {triangle_count} triangles
+                    - Expected size: {expected_size} bytes
+                    - Actual size: {actual_size} bytes
+                    Attempting recovery...
+                """)
                 
-            # Read in safe chunks
-            chunk_size = 100000
+                # Calculate valid triangle count
+                valid_triangles = (actual_size - 84) // 50
+                if valid_triangles < 1:
+                    raise ValueError("Not enough data for even 1 triangle")
+                    
+                st.info(f"Using {valid_triangles} valid triangles from file")
+                
+            # Read validated triangles
             vertices = []
-            while True:
-                pos = f.tell()
-                chunk = f.read(50 * chunk_size)
-                if not chunk:
+            for _ in range(valid_triangles):
+                try:
+                    # Read single triangle (50 bytes)
+                    data = f.read(50)
+                    if len(data) < 50:
+                        break
+                        
+                    # Extract vertices (skip normals and attributes)
+                    tri = np.frombuffer(data, dtype=np.float32)[3:12]  # Skip normal
+                    vertices.append(tri.reshape(3, 3))
+                    
+                except Exception as e:
+                    st.error(f"Corrupted triangle at position {f.tell()} - {str(e)}")
                     break
                     
-                # Handle partial chunks
-                remainder = len(chunk) % 50
-                if remainder != 0:
-                    chunk = chunk[:-remainder]
-                    f.seek(pos + len(chunk))  # Rewind to chunk end
-                    
-                # Convert to numpy with error handling
-                try:
-                    data = np.frombuffer(chunk, dtype=np.float32)
-                except ValueError as e:
-                    raise ValueError(f"Corrupted data at byte {pos}: {str(e)}")
-                    
-                triangles = data.reshape(-1, 12)[:, :9]
-                vertices.append(triangles.reshape(-1, 3))
-                
             if not vertices:
-                raise ValueError("No vertices found in binary STL")
+                raise ValueError("No valid triangles found after alignment correction")
                 
             all_vertices = np.unique(np.vstack(vertices), axis=0)
             
@@ -90,10 +89,11 @@ def load_mesh(stl_path: str) -> o3d.geometry.PointCloud:
 
     except Exception as e:
         st.error(f"""
-            STL Load Error: {str(e)}
-            File: {os.path.basename(stl_path)}
-            Size: {os.path.getsize(stl_path)/1e6:.1f}MB
-            Header: {header[:20] if 'header' in locals() else 'N/A'}
+            STL Load Failed:
+            - File: {os.path.basename(stl_path)}
+            - Size: {actual_size/1e6:.2f}MB
+            - Header: {header[:20].decode('ascii', 'ignore')}
+            - Error: {str(e)}
         """)
         raise
 
