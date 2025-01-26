@@ -50,17 +50,33 @@ def load_mesh(stl_path: str) -> o3d.geometry.PointCloud:
             bytes_per_triangle = 50  # 12 floats (4 bytes each) + 2 byte attr
             max_triangles = (file_size - 84) // bytes_per_triangle  # 84=header
             
-            # Read triangles in chunks
+            # Validate file alignment
+            expected_size = 84 + (50 * max_triangles)
+            if (file_size - 84) % 50 != 0:
+                raise ValueError("Invalid STL file alignment (corrupted?)")
+                
+            # Read in safe chunks
             chunk_size = 100000
             vertices = []
             while True:
-                chunk = f.read(bytes_per_triangle * chunk_size)
+                pos = f.tell()
+                chunk = f.read(50 * chunk_size)
                 if not chunk:
                     break
                     
-                # Convert to numpy array
-                data = np.frombuffer(chunk, dtype=np.float32)
-                triangles = data.reshape(-1, 12)[:, :9]  # Ignore normals+attributes
+                # Handle partial chunks
+                remainder = len(chunk) % 50
+                if remainder != 0:
+                    chunk = chunk[:-remainder]
+                    f.seek(pos + len(chunk))  # Rewind to chunk end
+                    
+                # Convert to numpy with error handling
+                try:
+                    data = np.frombuffer(chunk, dtype=np.float32)
+                except ValueError as e:
+                    raise ValueError(f"Corrupted data at byte {pos}: {str(e)}")
+                    
+                triangles = data.reshape(-1, 12)[:, :9]
                 vertices.append(triangles.reshape(-1, 3))
                 
             if not vertices:
