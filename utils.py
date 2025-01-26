@@ -29,70 +29,45 @@ def performance_monitor(func):
     return wrapper
 
 def load_mesh(stl_path: str) -> o3d.geometry.PointCloud:
+    """Load mesh as single merged point cloud"""
     try:
-        # Bypass header completely
+        # Try Open3D first
+        mesh = o3d.io.read_triangle_mesh(stl_path)
+        if mesh.has_vertices():
+            pcd = o3d.geometry.PointCloud()
+            pcd.points = mesh.vertices
+            return pcd
+            
+        # Fallback to raw point cloud reading
         with open(stl_path, 'rb') as f:
             data = f.read()
             
-        # Detect ASCII STL
-        if b"facet normal" in data[:1024]:
-            return load_ascii_stl(stl_path)
-            
-        # Binary STL with header recovery
-        triangles = []
+        # Skip header and process as raw points
+        points = []
         pos = 80  # Skip header
-        file_size = len(data)
-        max_reasonable = (file_size - 84) // 50
-        chunk_size = 1000
-        
-        while pos + 50 <= file_size:
+        while pos + 12 <= len(data):  # Read 3 floats at a time
             try:
-                # Extract 3 vertices (12 floats) from 50-byte block
-                tri_data = np.frombuffer(data[pos+12:pos+50], dtype=np.float32)  # Skip normal
-                triangles.append(tri_data.reshape(3, 3))
-                pos += 50
+                point = np.frombuffer(data[pos:pos+12], dtype=np.float32)
+                points.append(point)
+                pos += 50  # Skip to next potential point
             except:
-                # Try to find next valid triangle
-                next_tri = data.find(b"\x00\x00\x00\x00", pos)  # Common normal pattern
-                if next_tri == -1:
-                    break
-                pos = next_tri + 4  # Skip normal
+                pos += 1  # Try next byte
                 
-        if not triangles:
-            raise ValueError("No triangles found with deep scan")
+        if not points:
+            raise ValueError("No valid points found in file")
             
-        all_verts = np.unique(np.vstack(triangles), axis=0)
+        # Convert to array and remove duplicates
+        points = np.unique(np.vstack(points), axis=0)
+        
+        # Create point cloud
         pcd = o3d.geometry.PointCloud()
-        pcd.points = o3d.utility.Vector3dVector(all_verts)
+        pcd.points = o3d.utility.Vector3dVector(points)
+        st.info(f"Recovered {len(points)} unique points")
         return pcd
-
+        
     except Exception as e:
-        st.warning("⚠️ Using raw point cloud fallback...")
-        
-        with open(stl_path, 'rb') as f:
-            byte_data = f.read()
-            
-        # Ensure buffer is multiple of 4 bytes (float32 size)
-        valid_bytes = len(byte_data) // 4 * 4
-        if valid_bytes < 12:  # Need at least 3 floats (XYZ)
-            raise ValueError(f"Insuffient bytes ({len(byte_data)}), need at least 12")
-            
-        # Convert only aligned bytes
-        raw_data = np.frombuffer(byte_data[:valid_bytes], dtype=np.float32)
-        
-        # Handle partial XYZ triples at end
-        num_points = len(raw_data) // 3
-        points = raw_data[:num_points*3].reshape(-1, 3)
-        
-        if len(points) == 0:
-            raise ValueError("No valid XYZ coordinates found")
-            
-        unique_points = np.unique(points, axis=0)
-        
-        pcd = o3d.geometry.PointCloud()
-        pcd.points = o3d.utility.Vector3dVector(unique_points)
-        st.warning(f"Recovered {len(unique_points)} points from raw bytes")
-        return pcd
+        st.error(f"Error loading mesh: {str(e)}")
+        raise
 
 def load_ascii_stl(path: str) -> o3d.geometry.PointCloud:
     """Handle malformed ASCII STLs"""

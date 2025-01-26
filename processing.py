@@ -4,6 +4,7 @@ import streamlit as st
 from typing import Tuple, Optional, Dict, Any
 from utils import performance_monitor, load_mesh, sample_point_cloud
 import rhino3dm as rh
+import copy
 
 class STLAnalyzer:
     def __init__(self):
@@ -173,33 +174,54 @@ class RhinoAnalyzer:
         self.layer_weights = weights
         
     def load_reference(self, file_path: str, num_points: int, layers: int, voxel_size: float):
-        """Load reference file and prepare for analysis"""
-        # Store parameters first
+        """First stage: Load reference as merged point cloud"""
+        # Store parameters
         self.voxel_size = voxel_size
         self.num_layers = layers
         
-        # Load point cloud
+        # Load as single merged cloud
         raw_pcd = load_mesh(file_path)
+        self.reference_full = raw_pcd  # Store full cloud for later
         
-        # Explicitly create the point cloud object
-        if not isinstance(raw_pcd, o3d.geometry.PointCloud):
-            temp_pcd = o3d.geometry.PointCloud()
-            temp_pcd.points = o3d.utility.Vector3dVector(np.asarray(raw_pcd.points))
-            raw_pcd = temp_pcd
-        
-        st.info(f"Loaded reference with {len(raw_pcd.points)} points")
-        
-        # Sample points with explicit argument names
-        self.reference_pcd = sample_point_cloud(
-            pcd=raw_pcd,
-            num_points=num_points
-        )
-        
-        # Initialize weights if needed
-        if not hasattr(self, 'layer_weights'):
-            self.layer_weights = {i: 1.0 for i in range(layers)}
+        # Basic sampling for alignment
+        points = np.asarray(raw_pcd.points)
+        if len(points) > num_points:
+            indices = np.random.choice(len(points), num_points, replace=False)
+            sampled_points = points[indices]
+        else:
+            sampled_points = points
             
+        # Create sampled point cloud
+        self.reference_pcd = o3d.geometry.PointCloud()
+        self.reference_pcd.points = o3d.utility.Vector3dVector(sampled_points)
+        
         return self.reference_pcd
+        
+    def analyze_with_layers(self, target_pcd: o3d.geometry.PointCloud, transformation: np.ndarray):
+        """Second stage: Detailed analysis using layers"""
+        # Apply initial transformation
+        target_transformed = copy.deepcopy(target_pcd)
+        target_transformed.transform(transformation)
+        
+        results = {}
+        # Now use self.reference_full and separate into layers for detailed analysis
+        for layer in range(self.num_layers):
+            # Layer-specific analysis here
+            layer_results = self._analyze_layer(target_transformed, layer)
+            results[f'layer_{layer}'] = layer_results
+            
+        return results
+        
+    def _analyze_layer(self, target_pcd: o3d.geometry.PointCloud, layer: int):
+        """Analyze specific layer"""
+        # Layer-specific analysis implementation
+        # This will use self.reference_full and extract relevant points
+        # based on layer information
+        return {
+            'mean_distance': 0.0,  # Placeholder
+            'max_deviation': 0.0,  # Placeholder
+            'coverage': 0.0        # Placeholder
+        }
 
     def apply_layer_weights(self, points: np.ndarray, layers: np.ndarray) -> np.ndarray:
         """Safe layer weight application"""
