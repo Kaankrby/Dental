@@ -65,25 +65,31 @@ def load_mesh(stl_path: str) -> o3d.geometry.PointCloud:
         return pcd
 
     except Exception as e:
-        # Final fallback: raw point cloud assumption
-        st.warning("""⚠️ Using raw point cloud fallback.
-                   This file may be vertex-only or use non-standard encoding""")
+        st.warning("⚠️ Using raw point cloud fallback...")
         
-        # Read all 32-bit floats regardless of structure
         with open(stl_path, 'rb') as f:
-            raw_data = np.frombuffer(f.read(), dtype=np.float32)
+            byte_data = f.read()
             
-        # Extract XYZ triples (last partial triple ignored)
-        points = raw_data[:len(raw_data)//3*3].reshape(-1, 3)
+        # Ensure buffer is multiple of 4 bytes (float32 size)
+        valid_bytes = len(byte_data) // 4 * 4
+        if valid_bytes < 12:  # Need at least 3 floats (XYZ)
+            raise ValueError(f"Insuffient bytes ({len(byte_data)}), need at least 12")
+            
+        # Convert only aligned bytes
+        raw_data = np.frombuffer(byte_data[:valid_bytes], dtype=np.float32)
         
-        if len(points) < 3:
-            raise ValueError("Insufficient data for even single triangle")
+        # Handle partial XYZ triples at end
+        num_points = len(raw_data) // 3
+        points = raw_data[:num_points*3].reshape(-1, 3)
+        
+        if len(points) == 0:
+            raise ValueError("No valid XYZ coordinates found")
             
-        # Remove duplicate vertices
         unique_points = np.unique(points, axis=0)
         
         pcd = o3d.geometry.PointCloud()
         pcd.points = o3d.utility.Vector3dVector(unique_points)
+        st.warning(f"Recovered {len(unique_points)} points from raw bytes")
         return pcd
 
 def load_ascii_stl(path: str) -> o3d.geometry.PointCloud:
