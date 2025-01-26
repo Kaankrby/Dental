@@ -176,45 +176,47 @@ class RhinoAnalyzer:
         """Load Rhino .3dm file with layered meshes"""
         model = rh.File3dm.Read(file_path)
         found_layers = set()
-        
-        # Collect all meshes with layer weights
         weighted_points = []
+        
         for obj in model.Objects:
             if isinstance(obj.Geometry, rh.Mesh):
-                mesh = obj.Geometry
+                rh_mesh = obj.Geometry
                 layer = model.Layers.FindIndex(obj.Attributes.LayerIndex)
                 weight = self.layer_weights.get(layer.Name, 1.0)
                 
-                # Convert Rhino mesh to Open3D format
+                # Convert Rhino mesh vertices
+                vertices = np.array([[v.X, v.Y, v.Z] for v in rh_mesh.Vertices])
+                
+                # Convert faces ensuring triangles
+                triangles = []
+                for face in rh_mesh.Faces:
+                    if face.IsTriangle:
+                        triangles.append([face.A, face.B, face.C])
+                    elif face.IsQuad:
+                        # Split quad into two triangles
+                        triangles.append([face.A, face.B, face.C])
+                        triangles.append([face.A, face.C, face.D])
+                
+                # Create Open3D mesh
                 o3d_mesh = o3d.geometry.TriangleMesh()
-                o3d_mesh.vertices = o3d.utility.Vector3dVector(
-                    [[v.X, v.Y, v.Z] for v in mesh.Vertices]
-                )
-                o3d_mesh.triangles = o3d.utility.Vector3iVector(
-                    [[f.A, f.B, f.C] for f in mesh.Faces]
-                )
+                o3d_mesh.vertices = o3d.utility.Vector3dVector(vertices)
+                o3d_mesh.triangles = o3d.utility.Vector3iVector(triangles)
                 
-                # Validate mesh
-                if not o3d_mesh.has_triangles():
-                    raise ValueError(f"Layer {layer.Name} has invalid triangles")
+                # Validate conversion
+                if len(o3d_mesh.triangles) == 0:
+                    raise ValueError(f"Layer {layer.Name} conversion failed - {len(rh_mesh.Faces)} Rhino faces → {len(triangles)} Open3D triangles")
                     
-                # Process valid mesh
-                vertices = np.asarray(o3d_mesh.vertices)
+                # Store weights
                 weights = np.full((len(vertices), 1), weight)
-                weighted_vertices = np.hstack((vertices, weights))
-                
-                weighted_points.append(weighted_vertices)
+                weighted_points.append(np.hstack((vertices, weights)))
         
-        # Create combined weighted point cloud
+        # Combine all layers
         all_points = np.vstack(weighted_points)
         self.reference = o3d.geometry.PointCloud()
         self.reference.points = o3d.utility.Vector3dVector(all_points[:, :3])
-        self.reference.normals = o3d.utility.Vector3dVector(np.zeros((len(all_points), 3))) 
         self.reference.colors = o3d.utility.Vector3dVector(
-            np.tile(all_points[:, 3:], (1, 3))  # Weight as RGB color
+            np.tile(all_points[:, 3:], (1, 3))  # Weight as RGB
         )
-        
-        # Build KDTree for fast lookups
         self.kdtree = o3d.geometry.KDTreeFlann(self.reference)
         
         for obj in model.Objects:

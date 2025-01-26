@@ -181,6 +181,13 @@ def main():
                 st.metric("Triangles", len(test_mesh.triangles))
                 st.metric("Watertight", test_mesh.is_watertight())
 
+        with st.expander("🔍 Conversion Report"):
+            st.write(f"**Reference Layers Loaded:** {len(analyzer.reference_layers)}")
+            st.write(f"**Total Weighted Points:** {len(analyzer.reference.points)}")
+            st.write("**Layer Details:**")
+            for layer in LAYER_WEIGHTS:
+                st.write(f"- {layer}: {analyzer.layer_weights[layer]} weight")
+
 # Analysis Execution
 if st.button("🚀 Start Analysis", type="primary"):
     if not ref_file:
