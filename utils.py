@@ -6,6 +6,7 @@ import re
 import os
 from typing import Tuple, List, Dict, Any
 from functools import wraps
+import tempfile
 
 def performance_monitor(func):
     @wraps(func)
@@ -108,3 +109,9 @@ def validate_file_name(filename: str) -> bool:
     """Validate filename."""
     pattern = r'^[\w\-. ]+\.stl$'
     return bool(re.match(pattern, filename, re.IGNORECASE))
+
+def save_uploaded_file(uploaded_file):
+    """Save uploaded file to temporary directory"""
+    with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(uploaded_file.name)[1]) as f:
+        f.write(uploaded_file.getbuffer())
+        return f.name
