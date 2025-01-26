@@ -102,19 +102,18 @@ with st.expander("📤 Upload Files", expanded=True):
     
     with col1:
         st.subheader("Reference STL")
-        reference_file = st.file_uploader(
-            "Upload reference (ideal) STL",
-            type=["stl"],
-            key="ref_uploader"
+        ref_file = st.file_uploader(
+            "Upload Reference .3dm", 
+            type=["3dm"],
+            help="Rhino file with layered meshes (NOTIMPORTANT, Layer1, Layer2, BaseLayer)"
         )
         
     with col2:
         st.subheader("Test STL(s)")
-        test_files = st.file_uploader(
-            "Upload test STL(s) for comparison",
+        test_file = st.file_uploader(
+            "Upload Test STL", 
             type=["stl"],
-            accept_multiple_files=True,
-            key="test_uploader"
+            help="Scan file to analyze against reference"
         )
 
 # Layer weight configuration
@@ -139,10 +138,19 @@ def main():
         
         # Initialize analyzer with weights
         analyzer = RhinoAnalyzer(LAYER_WEIGHTS)
-        analyzer.load_reference_3dm(ref_path)
+        try:
+            analyzer.load_reference_3dm(ref_path)
+        except ValueError as e:
+            st.error(f"Reference Error: {str(e)}")
+            st.stop()
         
         # Process test file
-        test_mesh = o3d.io.read_triangle_mesh(test_path)
+        try:
+            test_mesh = o3d.io.read_triangle_mesh(test_path)
+        except Exception as e:
+            st.error(f"Test STL Error: {str(e)}")
+            st.stop()
+        
         test_pcd = test_mesh.sample_points_uniformly(10000)
         test_points = np.asarray(test_pcd.points)
         
@@ -161,12 +169,12 @@ def main():
 
 # Analysis Execution
 if st.button("🚀 Start Analysis", type="primary"):
-    if not reference_file:
+    if not ref_file:
         st.error("Please upload a reference STL file!")
         st.stop()
         
-    if not test_files:
-        st.error("Please upload at least one test STL file!")
+    if not test_file:
+        st.error("Please upload a test STL file!")
         st.stop()
         
     try:
@@ -179,104 +187,98 @@ if st.button("🚀 Start Analysis", type="primary"):
             status_text.markdown("🔍 **Processing reference file...**")
             ref_path = os.path.join(temp_dir, "reference.stl")
             with open(ref_path, "wb") as f:
-                f.write(reference_file.getbuffer())
+                f.write(ref_file.getbuffer())
                 
             analyzer.load_reference(ref_path, num_points, 20, 2.0)
             progress_bar.progress(10)
             
-            # Process test files
-            results = {}
-            for i, test_file in enumerate(test_files):
-                status_text.markdown(f"🔬 **Processing test file {i+1}/{len(test_files)}: {test_file.name}...**")
-                test_path = os.path.join(temp_dir, f"test_{test_file.name}")
-                with open(test_path, "wb") as f:
-                    test_file.seek(0)
-                    f.write(test_file.getbuffer())
-                
-                analyzer.add_test_file(test_path, num_points, 20, 2.0)
-                progress_bar.progress(10 + int(30*(i+1)/len(test_files)))
-                
-                # Run analysis
-                result = analyzer.process_test_file(
-                    test_path,
-                    use_global_registration,
-                    voxel_size_global,
-                    icp_threshold,
-                    icp_max_iter,
-                    True
-                )
-                results[test_file.name] = result
-                progress_bar.progress(40 + int(50*(i+1)/len(test_files)))
+            # Process test file
+            status_text.markdown("🔬 **Processing test file...**")
+            test_path = os.path.join(temp_dir, "test.stl")
+            with open(test_path, "wb") as f:
+                f.write(test_file.getbuffer())
+            
+            analyzer.add_test_file(test_path, num_points, 20, 2.0)
+            progress_bar.progress(40)
+            
+            # Run analysis
+            result = analyzer.process_test_file(
+                test_path,
+                use_global_registration,
+                voxel_size_global,
+                icp_threshold,
+                icp_max_iter,
+                True
+            )
             
             # Display results
             status_text.markdown("📊 **Generating visualizations...**")
             progress_bar.progress(90)
             
-            for test_name, result in results.items():
-                with st.expander(f"📌 Results: {test_name}", expanded=True):
-                    col_metrics, col_viz = st.columns([1, 2])
+            with st.expander("📌 Results", expanded=True):
+                col_metrics, col_viz = st.columns([1, 2])
+                
+                with col_metrics:
+                    st.subheader("📈 Metrics Summary")
+                    metrics = result['metrics']
                     
-                    with col_metrics:
-                        st.subheader("📈 Metrics Summary")
-                        metrics = result['metrics']
+                    metric_cols = st.columns(2)
+                    with metric_cols[0]:
+                        st.metric("Mean Deviation", f"{metrics['mean_deviation']:.3f} mm")
+                        st.metric("Volume Similarity", f"{metrics['volume_similarity']*100:.1f}%")
                         
-                        metric_cols = st.columns(2)
-                        with metric_cols[0]:
-                            st.metric("Mean Deviation", f"{metrics['mean_deviation']:.3f} mm")
-                            st.metric("Volume Similarity", f"{metrics['volume_similarity']*100:.1f}%")
-                            
-                        with metric_cols[1]:
-                            st.metric("Max Deviation", f"{metrics['max_deviation']:.3f} mm")
-                            st.metric("Normal Alignment", f"{metrics['mean_normal_angle']:.1f}°")
-                            
-                        metrics_df = pd.DataFrame({
-                            'Value': [
-                                f"{metrics['fitness']:.4f}",
-                                f"{metrics['inlier_rmse']:.4f}",
-                                f"{metrics['hausdorff_distance']:.4f}",
-                                f"{metrics['volume_difference']:.4f}",
-                                f"{metrics['center_of_mass_distance']:.4f}"
-                            ]
-                        }, index=['Fitness', 'RMSE', 'Hausdorff', 'Volume Diff', 'CoM Distance'])
-                        st.dataframe(metrics_df)
-                    
-                    with col_viz:
-                        st.subheader("Deviation Analysis")
-                        aligned_points = np.asarray(result['aligned_pcd'].points)
-                        distances = np.asarray(metrics['distances'])
+                    with metric_cols[1]:
+                        st.metric("Max Deviation", f"{metrics['max_deviation']:.3f} mm")
+                        st.metric("Normal Alignment", f"{metrics['mean_normal_angle']:.1f}°")
+                        
+                    metrics_df = pd.DataFrame({
+                        'Value': [
+                            f"{metrics['fitness']:.4f}",
+                            f"{metrics['inlier_rmse']:.4f}",
+                            f"{metrics['hausdorff_distance']:.4f}",
+                            f"{metrics['volume_difference']:.4f}",
+                            f"{metrics['center_of_mass_distance']:.4f}"
+                        ]
+                    }, index=['Fitness', 'RMSE', 'Hausdorff', 'Volume Diff', 'CoM Distance'])
+                    st.dataframe(metrics_df)
+                
+                with col_viz:
+                    st.subheader("Deviation Analysis")
+                    aligned_points = np.asarray(result['aligned_pcd'].points)
+                    distances = np.asarray(metrics['distances'])
 
-                        col3, col4 = st.columns(2)
-                        with col3:
-                            # 3D deviation map
-                            fig_heatmap = plot_point_cloud_heatmap(
-                                aligned_points,
-                                distances,
-                                point_size,
-                                color_scale,
-                                f"Deviation Map: {test_file.name}"
-                            )
-                            st.plotly_chart(fig_heatmap, use_container_width=True)
-
-                        with col4:
-                            # Histogram
-                            fig_hist = plot_deviation_histogram(
-                                distances,
-                                title=f"Deviation Distribution: {test_file.name}"
-                            )
-                            st.plotly_chart(fig_hist, use_container_width=True)
-
-                        # Export options
-                        export_data = pd.DataFrame(
-                            np.column_stack((aligned_points, distances)),
-                            columns=['X', 'Y', 'Z', 'Deviation']
+                    col3, col4 = st.columns(2)
+                    with col3:
+                        # 3D deviation map
+                        fig_heatmap = plot_point_cloud_heatmap(
+                            aligned_points,
+                            distances,
+                            point_size,
+                            color_scale,
+                            "Deviation Map"
                         )
+                        st.plotly_chart(fig_heatmap, use_container_width=True)
 
-                        st.download_button(
-                            "📥 Download Results (CSV)",
-                            export_data.to_csv(index=False).encode('utf-8'),
-                            f"results_{test_file.name}.csv",
-                            "text/csv"
+                    with col4:
+                        # Histogram
+                        fig_hist = plot_deviation_histogram(
+                            distances,
+                            title="Deviation Distribution"
                         )
+                        st.plotly_chart(fig_hist, use_container_width=True)
+
+                    # Export options
+                    export_data = pd.DataFrame(
+                        np.column_stack((aligned_points, distances)),
+                        columns=['X', 'Y', 'Z', 'Deviation']
+                    )
+
+                    st.download_button(
+                        "📥 Download Results (CSV)",
+                        export_data.to_csv(index=False).encode('utf-8'),
+                        "results.csv",
+                        "text/csv"
+                    )
             
             progress_bar.progress(100)
             st.success("✅ Analysis completed successfully!")
