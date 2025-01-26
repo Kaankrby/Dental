@@ -65,14 +65,8 @@ def load_mesh(stl_path: str) -> o3d.geometry.PointCloud:
         return pcd
 
     except Exception as e:
-        st.error(f"""
-            Final STL Load Failed:
-            - File: {os.path.basename(stl_path)}
-            - Size: {len(data)/1e6:.2f}MB
-            - First bytes: {data[:20].hex()}
-            - Error: {str(e)}
-        """)
-        raise
+        st.error(f"STL Load Error: {str(e)}")
+        raise ValueError from e
 
 def load_ascii_stl(path: str) -> o3d.geometry.PointCloud:
     """Handle malformed ASCII STLs"""
