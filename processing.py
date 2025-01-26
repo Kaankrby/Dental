@@ -1,7 +1,7 @@
 import open3d as o3d
 import numpy as np
 import streamlit as st
-from typing import Tuple, Optional, Dict
+from typing import Tuple, Optional, Dict, Any
 from utils import performance_monitor
 
 class STLAnalyzer:
@@ -11,7 +11,7 @@ class STLAnalyzer:
         self.reference_bbox = None
         self.test_meshes = {}
         self.results = {}
-        
+
     @performance_monitor
     def load_reference(self, file_path: str, num_points: int, nb_neighbors: int, std_ratio: float):
         """Load and process reference STL file."""
@@ -25,19 +25,19 @@ class STLAnalyzer:
             std_ratio
         )
         self.reference_bbox = self.reference_pcd.get_axis_aligned_bounding_box()
-        
+
     @performance_monitor
     def add_test_file(self, file_path: str, num_points: int, nb_neighbors: int, std_ratio: float):
         """Load and process a test STL file."""
         from utils import load_mesh, sample_point_cloud
-        
+
         mesh = load_mesh(file_path)
         pcd = sample_point_cloud(mesh, num_points, nb_neighbors, std_ratio)
         self.test_meshes[file_path] = {
             'mesh': mesh,
             'pcd': pcd
         }
-        
+
     @performance_monitor
     def prepare_for_global_registration(
         self,
@@ -60,7 +60,7 @@ class STLAnalyzer:
             )
         )
         return pcd_down, fpfh
-        
+
     @performance_monitor
     def global_registration(
         self,
@@ -71,7 +71,7 @@ class STLAnalyzer:
         """Perform global registration using RANSAC."""
         source_down, source_fpfh = self.prepare_for_global_registration(source, voxel_size)
         target_down, target_fpfh = self.prepare_for_global_registration(target, voxel_size)
-        
+
         result = o3d.pipelines.registration.registration_ransac_based_on_feature_matching(
             source_down, target_down,
             source_fpfh, target_fpfh,
@@ -86,7 +86,7 @@ class STLAnalyzer:
             criteria=o3d.pipelines.registration.RANSACConvergenceCriteria(4000000, 500)
         )
         return result.transformation
-        
+
     @performance_monitor
     def refine_registration(
         self,
@@ -104,7 +104,7 @@ class STLAnalyzer:
             o3d.pipelines.registration.ICPConvergenceCriteria(max_iteration=max_iter)
         )
         return result
-        
+
     @performance_monitor
     def process_test_file(
         self,
@@ -118,10 +118,10 @@ class STLAnalyzer:
         """Process a single test file and compute metrics."""
         if self.reference_pcd is None:
             raise ValueError("Reference not loaded")
-            
+
         test_data = self.test_meshes[file_path]
         test_pcd = test_data['pcd']
-        
+
         # Initial alignment
         transform_init = np.eye(4)
         if use_global_reg:
@@ -130,7 +130,7 @@ class STLAnalyzer:
                 self.reference_pcd,
                 voxel_size
             )
-            
+
         # ICP refinement
         icp_result = self.refine_registration(
             test_pcd,
@@ -139,17 +139,17 @@ class STLAnalyzer:
             icp_threshold,
             max_iter
         )
-        
+
         # Transform test point cloud
         test_aligned = test_pcd.transform(icp_result.transformation)
-        
+
         # Filter points if needed
         if ignore_outside_bbox:
             indices = self.reference_bbox.get_point_indices_within_bounding_box(
                 test_aligned.points
             )
             test_aligned = test_aligned.select_by_index(indices)
-            
+
         # Compute metrics
         from utils import compute_advanced_metrics
         metrics = compute_advanced_metrics(test_aligned, self.reference_pcd)
@@ -158,10 +158,10 @@ class STLAnalyzer:
             'inlier_rmse': icp_result.inlier_rmse,
             'transformation': icp_result.transformation
         })
-        
+
         self.results[file_path] = {
             'metrics': metrics,
             'aligned_pcd': test_aligned
         }
-        
+
         return self.results[file_path]
