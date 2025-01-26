@@ -1,3 +1,9 @@
+import sys
+if sys.version_info >= (3, 10):
+    import collections.abc
+    collections = sys.modules['collections']
+    collections.Mapping = collections.abc.Mapping
+
 import open3d as o3d
 import numpy as np
 import streamlit as st
