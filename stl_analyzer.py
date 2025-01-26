@@ -368,3 +368,17 @@ if ref_file:
             st.metric("Total Meshes", sum(1 for obj in model.Objects if isinstance(obj.Geometry, rh.Mesh)))
             st.metric("Total Vertices", sum(len(obj.Geometry.Vertices) 
                                           for obj in model.Objects if isinstance(obj.Geometry, rh.Mesh)))
+
+def show_analysis_results(analyzer, transformed):
+    # Existing visualization pipeline
+    col1, col2 = st.columns(2)
+    with col1:
+        fig = plot_point_cloud_heatmap(analyzer.reference)
+        st.plotly_chart(fig, use_container_width=True)
+        
+    with col2:
+        fig = plot_multiple_point_clouds(
+            [analyzer.reference, transformed],
+            ['Reference', 'Target']
+        )
+        st.plotly_chart(fig, use_container_width=True)
