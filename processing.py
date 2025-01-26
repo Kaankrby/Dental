@@ -2,7 +2,7 @@ import open3d as o3d
 import numpy as np
 import streamlit as st
 from typing import Tuple, Optional, Dict, Any
-from utils import performance_monitor, load_mesh, sample_point_cloud
+from utils import performance_monitor, load_mesh
 import rhino3dm as rh
 import copy
 
@@ -180,13 +180,13 @@ class STLAnalyzer:
 
 class RhinoAnalyzer:
     def __init__(self):
-        self.layer_weights = {}  # Will be set from UI
-        self.reference = None
-        
-    def set_weights(self, weights: dict):
-        """Update weights from UI"""
-        self.layer_weights = weights
-        
+        self.reference_pcd = None
+        self.reference_full = None
+        self.target_pcd = None
+        self.voxel_size = None
+        self.num_layers = None
+        self.layer_weights = None
+
     @performance_monitor
     def load_reference(self, file_path: str, num_points: int, layers: int, voxel_size: float):
         """Load reference as merged point cloud"""
@@ -216,11 +216,9 @@ class RhinoAnalyzer:
     @performance_monitor
     def load_target(self, file_path: str):
         """Load target file"""
-        # Direct loading without sampling
         target_pcd = load_mesh(file_path)
         points = np.asarray(target_pcd.points)
         
-        # Create point cloud
         self.target_pcd = o3d.geometry.PointCloud()
         self.target_pcd.points = o3d.utility.Vector3dVector(points)
         

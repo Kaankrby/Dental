@@ -8,13 +8,16 @@ import numpy as np
 import pandas as pd
 import tempfile
 import os
-from processing import STLAnalyzer, RhinoAnalyzer
+from processing import RhinoAnalyzer
 from visualization import (
     plot_point_cloud_heatmap, 
     plot_multiple_point_clouds,
     plot_deviation_histogram,
     plot_normal_angle_distribution,
-    plot_rhino_model
+    plot_rhino_model,
+    plot_point_cloud_with_normals,
+    plot_registration_result,
+    plot_distance_histogram
 )
 from utils import validate_file_name, save_uploaded_file, validate_3dm_file, validate_stl_file
 from streamlit.runtime.scriptrunner import get_script_run_ctx
@@ -35,7 +38,7 @@ st.set_page_config(
 ctx = get_script_run_ctx()
 if ctx and not hasattr(ctx, "_is_replicated"):
     if 'analyzer' not in st.session_state:
-        st.session_state['analyzer'] = STLAnalyzer()
+        st.session_state['analyzer'] = RhinoAnalyzer()
 
 # -------------------------------------------------
 # Sidebar Controls
