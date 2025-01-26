@@ -6,130 +6,108 @@ import numpy as np
 from typing import List, Tuple
 import rhino3dm as rh
 import plotly.express as px
+import open3d as o3d
+import copy
 
-def plot_point_cloud_heatmap(
-    points: np.ndarray,
-    values: np.ndarray,
-    point_size: int,
-    color_scale: str,
-    title: str
+def plot_point_cloud_heatmap(pcd: o3d.geometry.PointCloud) -> go.Figure:
+    """Create a heatmap visualization of point cloud"""
+    points = np.asarray(pcd.points)
+    
+    # Create figure
+    fig = go.Figure(data=[go.Scatter3d(
+        x=points[:, 0],
+        y=points[:, 1],
+        z=points[:, 2],
+        mode='markers',
+        marker=dict(
+            size=2,
+            color=points[:, 2],  # Color by Z coordinate
+            colorscale='Viridis',
+            showscale=True
+        )
+    )])
+    
+    # Update layout
+    fig.update_layout(
+        scene=dict(
+            aspectmode='data'
+        ),
+        margin=dict(l=0, r=0, b=0, t=0)
+    )
+    
+    return fig
+
+def plot_multiple_point_clouds(
+    point_clouds: List[o3d.geometry.PointCloud],
+    labels: List[str],
+    colors: List[str] = None
 ) -> go.Figure:
-    """3D scatter plot with heatmap coloring for deviations."""
-    fig = go.Figure(data=[
-        go.Scatter3d(
+    """Plot multiple point clouds with different colors"""
+    if colors is None:
+        colors = ['blue', 'red', 'green', 'yellow']
+    
+    fig = go.Figure()
+    
+    for pcd, label, color in zip(point_clouds, labels, colors):
+        points = np.asarray(pcd.points)
+        fig.add_trace(go.Scatter3d(
             x=points[:, 0],
             y=points[:, 1],
             z=points[:, 2],
             mode='markers',
+            name=label,
             marker=dict(
-                size=point_size,
-                color=values,
-                colorscale=color_scale,
-                showscale=True,
-                colorbar=dict(
-                    title="Deviation (mm)",
-                    titleside="right"
-                ),
-                opacity=0.8
-            ),
-            hovertemplate=(
-                "X: %{x:.2f} mm<br>"
-                "Y: %{y:.2f} mm<br>"
-                "Z: %{z:.2f} mm<br>"
-                "Deviation: %{marker.color:.3f} mm<extra></extra>"
+                size=2,
+                color=color,
+                opacity=0.7
             )
-        )
-    ])
-    
-    fig.update_layout(
-        title=dict(text=title, x=0.5, xanchor='center'),
-        scene=dict(
-            aspectmode='data',
-            xaxis_title="X (mm)",
-            yaxis_title="Y (mm)",
-            zaxis_title="Z (mm)",
-            camera=dict(
-                eye=dict(x=1.5, y=1.5, z=1.5),
-                up=dict(x=0, y=0, z=1)
-            )
-        ),
-        margin=dict(l=0, r=0, b=0, t=40),
-        height=600
-    )
-    return fig
-
-def plot_multiple_point_clouds(
-    pcd_data: list[tuple[np.ndarray, str, str]],
-    point_size: int
-) -> go.Figure:
-    """
-    Visualize multiple point clouds in different colors
-    
-    Parameters:
-    pcd_data: List of tuples (points_array, color_hex, label)
-    point_size: Size of points in visualization
-    """
-    fig = go.Figure()
-    
-    for points, color, label in pcd_data:
-        fig.add_trace(
-            go.Scatter3d(
-                x=points[:, 0],
-                y=points[:, 1],
-                z=points[:, 2],
-                mode='markers',
-                marker=dict(
-                    size=point_size,
-                    color=color,
-                    opacity=0.7
-                ),
-                name=label
-            )
-        )
+        ))
     
     fig.update_layout(
         scene=dict(
-            aspectmode='data',
-            xaxis_title="X (mm)",
-            yaxis_title="Y (mm)",
-            zaxis_title="Z (mm)"
+            aspectmode='data'
         ),
-        margin=dict(l=0, r=0, b=0, t=30)
+        margin=dict(l=0, r=0, b=0, t=0)
     )
+    
     return fig
 
 def plot_deviation_histogram(
-    data: np.ndarray,
-    bins: int = 50,
-    title: str = "Deviation Distribution"
+    distances: np.ndarray,
+    title: str = "Point Cloud Distances"
 ) -> go.Figure:
-    """Histogram of deviation values with statistical markers."""
-    fig = go.Figure()
-    
-    fig.add_trace(go.Histogram(
-        x=data,
-        nbinsx=bins,
-        marker_color='#636EFA',
-        opacity=0.75,
-        name="Deviations"
-    ))
-    
-    mean_val = np.mean(data)
-    std_val = np.std(data)
-    
-    fig.add_vline(x=mean_val, line_dash="dash", line_color="red",
-                 annotation_text=f"Mean: {mean_val:.3f}")
-    fig.add_vline(x=mean_val + std_val, line_dash="dot", line_color="orange")
-    fig.add_vline(x=mean_val - std_val, line_dash="dot", line_color="orange")
+    """Create histogram of point cloud distances"""
+    fig = go.Figure(data=[go.Histogram(
+        x=distances,
+        nbinsx=50,
+        name="Distance Distribution"
+    )])
     
     fig.update_layout(
-        title=dict(text=title, x=0.5, xanchor='center'),
-        xaxis_title="Deviation (mm)",
+        title=title,
+        xaxis_title="Distance (mm)",
         yaxis_title="Count",
-        bargap=0.05,
-        height=400
+        showlegend=False
     )
+    
     return fig
+
+def plot_registration_result(
+    source: o3d.geometry.PointCloud,
+    target: o3d.geometry.PointCloud,
+    transformation: np.ndarray
+) -> go.Figure:
+    """Visualize registration result"""
+    # Transform source point cloud
+    source_transformed = copy.deepcopy(source)
+    source_transformed.transform(transformation)
+    
+    # Plot both point clouds
+    return plot_multiple_point_clouds(
+        [source_transformed, target],
+        ["Aligned Source", "Target"],
+        ["blue", "red"]
+    )
 
 def plot_normal_angle_distribution(
     points: np.ndarray,
