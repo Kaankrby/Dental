@@ -172,23 +172,26 @@ class RhinoAnalyzer:
         """Update weights from UI"""
         self.layer_weights = weights
         
-    def load_reference_3dm(self, file_path: str):
-        model = rh.File3dm.Read(file_path)
-        weighted_points = []
+    def load_reference(self, file_path: str, num_points: int, layers: int, voxel_size: float):
+        # Load point cloud
+        raw_pcd = load_mesh(file_path)
+        self.reference_pcd = sample_point_cloud(raw_pcd, num_points)
         
-        # Handle missing layers
-        default_weight = 1.0
-        for obj in model.Objects:
-            layer_idx = obj.Attributes.LayerIndex
-            layer = model.Layers[layer_idx] if layer_idx < len(model.Layers) else None
-            weight = self.layer_weights.get(layer.Name if layer else "default", default_weight)
+        # Layer validation
+        if not (1 <= layers <= 4):
+            raise ValueError("Dental layers must be between 1-4")
             
-            # Fallback for undefined layers
-            if layer is None:
-                weight = default_weight
-                st.warning(f"Object has invalid layer index {layer_idx}, using default weight")
+        # Initialize layer weights for BOTH files
+        self.layer_weights = {i: 1.0 for i in range(layers)}
+        
+    def apply_layer_weights(self, points: np.ndarray, layers: np.ndarray) -> np.ndarray:
+        """Safe layer weight application"""
+        valid_layers = [i for i in np.unique(layers) if i in self.layer_weights]
+        if not valid_layers:
+            raise ValueError("No matching layers between reference and target")
             
-            # ... rest of processing ...
+        weights = np.array([self.layer_weights.get(l, 1.0) for l in layers])
+        return points * weights.reshape(-1, 1)
 
     def calculate_weighted_deviation(self, test_points: np.ndarray) -> dict:
         """Calculate weighted deviations against reference"""
