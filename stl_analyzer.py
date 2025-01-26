@@ -121,6 +121,11 @@ with st.sidebar:
     analyzer = st.session_state['analyzer']
     analyzer.layer_weights = st.session_state.layer_weights
 
+    if not st.session_state.layer_weights:
+        # Initialize with layers from both files
+        all_layers = set(analyzer.get_reference_layers()) | set(analyzer.get_target_layers())
+        st.session_state.layer_weights = {layer: 1.0 for layer in all_layers}
+
 # -------------------------------------------------
 # Main Interface
 # -------------------------------------------------

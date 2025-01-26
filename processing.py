@@ -173,21 +173,22 @@ class RhinoAnalyzer:
         self.layer_weights = weights
         
     def load_reference_3dm(self, file_path: str):
-        """Load Rhino .3dm file with layered meshes"""
-        self.reference = load_mesh(file_path)  # Now returns o3d.geometry.PointCloud
+        model = rh.File3dm.Read(file_path)
+        weighted_points = []
         
-        # Preserve existing weight initialization 
-        if not hasattr(self, 'layer_weights'):
-            self.layer_weights = st.session_state.layer_weights
+        # Handle missing layers
+        default_weight = 1.0
+        for obj in model.Objects:
+            layer_idx = obj.Attributes.LayerIndex
+            layer = model.Layers[layer_idx] if layer_idx < len(model.Layers) else None
+            weight = self.layer_weights.get(layer.Name if layer else "default", default_weight)
             
-        # Existing processing pipeline remains unchanged
-        self._preprocess_reference()
-        
-    def _preprocess_reference(self):
-        '''Existing preprocessing logic'''
-        # Downsampling and KDTree construction
-        self.reference = self.reference.voxel_down_sample(self.voxel_size)
-        self.kdtree = o3d.geometry.KDTreeFlann(self.reference)
+            # Fallback for undefined layers
+            if layer is None:
+                weight = default_weight
+                st.warning(f"Object has invalid layer index {layer_idx}, using default weight")
+            
+            # ... rest of processing ...
 
     def calculate_weighted_deviation(self, test_points: np.ndarray) -> dict:
         """Calculate weighted deviations against reference"""
