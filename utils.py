@@ -28,30 +28,56 @@ def performance_monitor(func):
 
 def load_mesh(stl_path: str) -> o3d.geometry.PointCloud:
     try:
-        # First try standard Open3D loading
+        # First try Open3D's fast path
         mesh = o3d.io.read_triangle_mesh(stl_path)
         if mesh.has_vertices():
             pcd = o3d.geometry.PointCloud()
             pcd.points = mesh.vertices
             return pcd
+
+        # Fallback: Direct binary parsing with safety limits
+        with open(stl_path, 'rb') as f:
+            header = f.read(80)
+            raw_triangle_count = f.read(4)
             
-        # Fallback to numpy-stl for problematic files
-        stl_data = stl_mesh.Mesh.from_file(stl_path)
-        vertices = np.unique(stl_data.vectors.reshape(-1, 3), axis=0)
-        
-        if len(vertices) == 0:
-            raise ValueError(f"STL file contains no vertices (size: {os.path.getsize(stl_path)} bytes)")
+            # Validate realistic file size
+            file_size = os.path.getsize(stl_path)
+            max_reasonable = 500 * 1024 * 1024  # 500MB
+            if file_size > max_reasonable:
+                raise ValueError(f"File size {file_size/1e6:.1f}MB exceeds safety limit")
+                
+            # Calculate actual triangle capacity
+            bytes_per_triangle = 50  # 12 floats (4 bytes each) + 2 byte attr
+            max_triangles = (file_size - 84) // bytes_per_triangle  # 84=header
             
-        pcd = o3d.geometry.PointCloud()
-        pcd.points = o3d.utility.Vector3dVector(vertices)
-        return pcd
-        
+            # Read triangles in chunks
+            chunk_size = 100000
+            vertices = []
+            while True:
+                chunk = f.read(bytes_per_triangle * chunk_size)
+                if not chunk:
+                    break
+                    
+                # Convert to numpy array
+                data = np.frombuffer(chunk, dtype=np.float32)
+                triangles = data.reshape(-1, 12)[:, :9]  # Ignore normals+attributes
+                vertices.append(triangles.reshape(-1, 3))
+                
+            if not vertices:
+                raise ValueError("No vertices found in binary STL")
+                
+            all_vertices = np.unique(np.vstack(vertices), axis=0)
+            
+            pcd = o3d.geometry.PointCloud()
+            pcd.points = o3d.utility.Vector3dVector(all_vertices)
+            return pcd
+
     except Exception as e:
         st.error(f"""
             STL Load Error: {str(e)}
-            File Info: {os.path.basename(stl_path)} 
-            Size: {os.path.getsize(stl_path)/1024:.1f} KB
-            MD5: {hashlib.md5(open(stl_path,'rb').read()).hexdigest()}
+            File: {os.path.basename(stl_path)}
+            Size: {os.path.getsize(stl_path)/1e6:.1f}MB
+            Header: {header[:20] if 'header' in locals() else 'N/A'}
         """)
         raise
 
