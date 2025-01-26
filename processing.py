@@ -173,18 +173,21 @@ class RhinoAnalyzer:
         self.layer_weights = weights
         
     def load_reference(self, file_path: str, num_points: int, layers: int, voxel_size: float):
-        """Load and process reference point cloud"""
+        """Load reference file and prepare for analysis"""
         # Load raw point cloud
         raw_pcd = load_mesh(file_path)
-        st.info(f"Loaded raw point cloud with {len(raw_pcd.points)} points")
+        st.info(f"Loaded reference with {len(raw_pcd.points)} points")
         
-        # Sample points
+        # Sample points (only needs pcd and target count)
         self.reference_pcd = sample_point_cloud(raw_pcd, num_points)
-        st.info(f"Sampled to {len(self.reference_pcd.points)} points")
         
-        # Initialize weights
-        self.layer_weights = {i: 1.0 for i in range(layers)}
+        # Store parameters
         self.voxel_size = voxel_size
+        self.num_layers = layers
+        
+        # Initialize weights if needed
+        if not hasattr(self, 'layer_weights'):
+            self.layer_weights = {i: 1.0 for i in range(layers)}
 
     def apply_layer_weights(self, points: np.ndarray, layers: np.ndarray) -> np.ndarray:
         """Safe layer weight application"""

@@ -110,38 +110,20 @@ def load_ascii_stl(path: str) -> o3d.geometry.PointCloud:
     return pcd
 
 def sample_point_cloud(pcd: o3d.geometry.PointCloud, num_points: int) -> o3d.geometry.PointCloud:
-    """Sample points from point cloud using voxel grid"""
+    """Sample points from point cloud to target count"""
     st.info(f"Sampling {num_points} points from cloud of size {len(pcd.points)}")
     
-    # If we have fewer points than requested, return as is
     if len(pcd.points) <= num_points:
-        st.warning(f"Point cloud has fewer points ({len(pcd.points)}) than requested ({num_points})")
         return pcd
         
-    # Calculate voxel size for approximate point count
+    # Use voxel downsampling
     bbox = pcd.get_axis_aligned_bounding_box()
-    bbox_size = bbox.get_extent()
-    
-    # Estimate initial voxel size
-    volume = np.prod(bbox_size)
+    volume = np.prod(bbox.get_extent())
     voxel_size = (volume / num_points) ** (1/3)
     
-    # Iteratively adjust voxel size to get closer to target point count
-    max_iterations = 10
-    for i in range(max_iterations):
-        downsampled = pcd.voxel_down_sample(voxel_size=voxel_size)
-        current_points = len(downsampled.points)
-        
-        st.info(f"Iteration {i+1}: got {current_points} points with voxel size {voxel_size:.6f}")
-        
-        # Check if we're close enough
-        if abs(current_points - num_points) < num_points * 0.1:  # Within 10%
-            return downsampled
-            
-        # Adjust voxel size based on ratio
-        voxel_size *= (current_points / num_points) ** (1/3)
-        
-    # If we couldn't get exact count, do final random sampling
+    downsampled = pcd.voxel_down_sample(voxel_size=voxel_size)
+    
+    # Final random sampling if needed
     if len(downsampled.points) > num_points:
         points = np.asarray(downsampled.points)
         indices = np.random.choice(len(points), num_points, replace=False)
