@@ -323,12 +323,12 @@ if ref_file:
     with st.expander("📊 Layer Summary"):
         layers = {layer.Name: layer for layer in model.Layers}
         layer_table = pd.DataFrame.from_dict({
-            "Layer": layers.keys(),
+            "Layer": [layer.Name for layer in model.Layers],
             "Object Count": [
                 sum(1 for obj in model.Objects if obj.Attributes.LayerIndex == layer.Index)
                 for layer in model.Layers
             ],
-            "Weight": [LAYER_WEIGHTS.get(name, 1.0) for name in layers]
+            "Weight": [LAYER_WEIGHTS.get(layer.Name, 1.0) for layer in model.Layers]
         })
         st.dataframe(layer_table)
     
