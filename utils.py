@@ -18,11 +18,18 @@ def performance_monitor(func):
         return result
     return wrapper
 
-def load_mesh(file_path: str) -> o3d.geometry.PointCloud:
-    pcd = o3d.io.read_point_cloud(file_path)
-    if len(pcd.points) == 0:
-        raise ValueError("Point cloud is empty")
-    return pcd
+def load_mesh(stl_path: str) -> o3d.geometry.PointCloud:
+    try:
+        # Try reading as point cloud first
+        pcd = o3d.io.read_point_cloud(stl_path)
+        if not pcd.has_points():
+            # Fallback: read as triangle mesh and extract vertices
+            mesh = o3d.io.read_triangle_mesh(stl_path)
+            pcd = mesh.sample_points_uniformly(number_of_points=len(mesh.vertices))
+        return pcd
+    except Exception as e:
+        st.error(f"STL Load Error: {str(e)}")
+        raise
 
 def sample_point_cloud(
     mesh: o3d.geometry.TriangleMesh,

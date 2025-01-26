@@ -90,6 +90,32 @@ with st.sidebar:
         ["viridis", "plasma", "turbo", "hot"]
     )
     
+    # Replace the layer weight definition with:
+    if 'layer_weights' not in st.session_state:
+        st.session_state.layer_weights = {
+            "0.1": 1.0,
+            "0.4": 0.8,
+            "1": 0.6,
+            "NOTIMPORTANT": 0.4
+        }
+
+    # Editable weight table
+    st.subheader("⚖️ Layer Weights")
+    weight_df = pd.DataFrame(
+        list(st.session_state.layer_weights.items()),
+        columns=["Layer", "Weight"]
+    )
+    edited_df = st.data_editor(
+        weight_df,
+        use_container_width=True,
+        num_rows="dynamic"
+    )
+    st.session_state.layer_weights = edited_df.set_index('Layer')['Weight'].to_dict()
+
+    # Update analyzer with current weights
+    analyzer = st.session_state['analyzer']
+    analyzer.layer_weights = st.session_state.layer_weights
+
 # -------------------------------------------------
 # Main Interface
 # -------------------------------------------------
@@ -340,5 +366,5 @@ if ref_file:
         with col2:
             st.metric("Total Layers", len(layers))
             st.metric("Total Meshes", sum(1 for obj in model.Objects if isinstance(obj.Geometry, rh.Mesh)))
-            st.metric("Total Vertices", sum(obj.Geometry.Vertices.Count 
+            st.metric("Total Vertices", sum(len(obj.Geometry.Vertices) 
                                           for obj in model.Objects if isinstance(obj.Geometry, rh.Mesh)))
