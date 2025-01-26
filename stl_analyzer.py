@@ -8,11 +8,13 @@ from visualization import (
     plot_point_cloud_heatmap, 
     plot_multiple_point_clouds,
     plot_deviation_histogram,
-    plot_normal_angle_distribution
+    plot_normal_angle_distribution,
+    plot_rhino_model
 )
 from utils import validate_file_name
 from streamlit.runtime.scriptrunner import get_script_run_ctx
 import open3d as o3d
+import rhino3dm as rh
 
 # -------------------------------------------------
 # Configuration
@@ -308,3 +310,34 @@ if st.button("🚀 Start Analysis", type="primary"):
     except Exception as e:
         st.error(f"❌ Analysis failed: {str(e)}")
         st.exception(e)
+
+# After file upload but before processing
+if ref_file:
+    st.subheader("🔍 Reference File Preview")
+    
+    # Save and load temporary file
+    ref_path = save_uploaded_file(ref_file)
+    model = rh.File3dm.Read(ref_path)
+    
+    # Layer overview
+    with st.expander("📊 Layer Summary"):
+        layers = {model.Layers[i].Name: model.Layers[i] for i in range(model.Layers.Count)}
+        layer_table = pd.DataFrame.from_dict({
+            "Layer": layers.keys(),
+            "Object Count": [sum(1 for obj in model.Objects if obj.Attributes.LayerIndex == i) 
+                           for i, _ in enumerate(layers)],
+            "Weight": [LAYER_WEIGHTS.get(name, 1.0) for name in layers]
+        })
+        st.dataframe(layer_table)
+    
+    # 3D Preview
+    with st.expander("🖼️ 3D Preview"):
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            plot = plot_rhino_model(model)
+            st.plotly_chart(plot, use_container_width=True)
+        with col2:
+            st.metric("Total Layers", len(layers))
+            st.metric("Total Meshes", sum(1 for obj in model.Objects if isinstance(obj.Geometry, rh.Mesh)))
+            st.metric("Total Vertices", sum(obj.Geometry.Vertices.Count 
+                                          for obj in model.Objects if isinstance(obj.Geometry, rh.Mesh)))

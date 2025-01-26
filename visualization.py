@@ -4,6 +4,8 @@ os.environ['OPEN3D_CPU_RENDERING'] = 'true'
 import plotly.graph_objects as go
 import numpy as np
 from typing import List, Tuple
+import rhinoscriptsyntax as rh
+import plotly.express as px
 
 def plot_point_cloud_heatmap(
     points: np.ndarray,
@@ -176,5 +178,53 @@ def plot_normal_angle_distribution(
         ),
         margin=dict(l=0, r=0, b=0, t=40),
         height=600
+    )
+    return fig
+
+def plot_rhino_model(model: rh.File3dm) -> go.Figure:
+    """Create 3D visualization of Rhino model layers"""
+    fig = go.Figure()
+    
+    # Color mapping for layers
+    colors = px.colors.qualitative.Plotly
+    
+    for i, layer in enumerate(model.Layers):
+        # Get layer meshes
+        meshes = [obj.Geometry for obj in model.Objects 
+                if obj.Attributes.LayerIndex == i 
+                and isinstance(obj.Geometry, rh.Mesh)]
+        
+        # Combine vertices
+        vertices = []
+        for mesh in meshes:
+            vertices.extend([[v.X, v.Y, v.Z] for v in mesh.Vertices])
+        
+        if not vertices:
+            continue
+            
+        # Add to plot
+        vertices = np.array(vertices)
+        fig.add_trace(go.Scatter3d(
+            x=vertices[:, 0],
+            y=vertices[:, 1],
+            z=vertices[:, 2],
+            mode='markers',
+            marker=dict(
+                size=2,
+                color=colors[i % len(colors)],
+                opacity=0.7
+            ),
+            name=f"{layer.Name} Layer"
+        ))
+    
+    fig.update_layout(
+        scene=dict(
+            xaxis_title='X (mm)',
+            yaxis_title='Y (mm)',
+            zaxis_title='Z (mm)',
+            aspectmode='data'
+        ),
+        height=600,
+        margin=dict(l=0, r=0, b=0, t=30)
     )
     return fig
