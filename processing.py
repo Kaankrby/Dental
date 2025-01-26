@@ -175,6 +175,7 @@ class RhinoAnalyzer:
     def load_reference_3dm(self, file_path: str):
         """Load Rhino .3dm file with layered meshes"""
         model = rh.File3dm.Read(file_path)
+        found_layers = set()
         
         # Collect all meshes with layer weights
         weighted_points = []
@@ -202,6 +203,17 @@ class RhinoAnalyzer:
         
         # Build KDTree for fast lookups
         self.kdtree = o3d.geometry.KDTreeFlann(self.reference)
+        
+        for obj in model.Objects:
+            if isinstance(obj.Geometry, rh.Mesh):
+                layer = model.Layers.FindIndex(obj.Attributes.LayerIndex)
+                found_layers.add(layer.Name)
+        
+        # Verify required layers
+        required_layers = set(self.layer_weights.keys())
+        missing = required_layers - found_layers
+        if missing:
+            raise ValueError(f"Missing required layers: {', '.join(missing)}")
 
     def calculate_weighted_deviation(self, test_points: np.ndarray) -> dict:
         """Calculate weighted deviations against reference"""

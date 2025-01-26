@@ -7,6 +7,7 @@ import os
 from typing import Tuple, List, Dict, Any, Optional
 from functools import wraps
 import tempfile
+import rhinoscriptsyntax as rh
 
 def performance_monitor(func):
     @wraps(func)
@@ -145,3 +146,25 @@ def save_uploaded_file(uploaded_file):
     with tempfile.NamedTemporaryFile(delete=False, suffix=os.path.splitext(uploaded_file.name)[1]) as f:
         f.write(uploaded_file.getbuffer())
         return f.name
+
+def validate_3dm_file(file_path: str):
+    """Check if file is valid Rhino .3dm"""
+    try:
+        model = rh.File3dm.Read(file_path)
+        if model.Objects.Count == 0:
+            raise ValueError("No meshes found in .3dm file")
+        return True
+    except Exception as e:
+        st.error(f"Invalid .3dm file: {str(e)}")
+        return False
+
+def validate_stl_file(file_path: str):
+    """Check STL file validity"""
+    try:
+        mesh = o3d.io.read_triangle_mesh(file_path)
+        if not mesh.has_triangles():
+            raise ValueError("Invalid STL - no triangles found")
+        return True
+    except Exception as e:
+        st.error(f"STL Error: {str(e)}")
+        return False
