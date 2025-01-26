@@ -7,6 +7,8 @@ import os
 from typing import Tuple, List, Dict, Any, Optional
 from functools import wraps
 import tempfile
+import hashlib
+from stl import mesh as stl_mesh
 
 def performance_monitor(func):
     @wraps(func)
@@ -20,20 +22,31 @@ def performance_monitor(func):
 
 def load_mesh(stl_path: str) -> o3d.geometry.PointCloud:
     try:
-        # Direct vertex extraction from STL
+        # First try standard Open3D loading
         mesh = o3d.io.read_triangle_mesh(stl_path)
-        
-        if not mesh.has_vertices():
-            raise ValueError("STL file contains no vertices")
+        if mesh.has_vertices():
+            pcd = o3d.geometry.PointCloud()
+            pcd.points = mesh.vertices
+            return pcd
             
-        # Create point cloud directly from mesh vertices
-        pcd = o3d.geometry.PointCloud()
-        pcd.points = mesh.vertices
+        # Fallback to numpy-stl for problematic files
+        stl_data = stl_mesh.Mesh.from_file(stl_path)
+        vertices = np.unique(stl_data.vectors.reshape(-1, 3), axis=0)
         
+        if len(vertices) == 0:
+            raise ValueError(f"STL file contains no vertices (size: {os.path.getsize(stl_path)} bytes)")
+            
+        pcd = o3d.geometry.PointCloud()
+        pcd.points = o3d.utility.Vector3dVector(vertices)
         return pcd
         
     except Exception as e:
-        st.error(f"STL Load Error: {str(e)}")
+        st.error(f"""
+            STL Load Error: {str(e)}
+            File Info: {os.path.basename(stl_path)} 
+            Size: {os.path.getsize(stl_path)/1024:.1f} KB
+            MD5: {hashlib.md5(open(stl_path,'rb').read()).hexdigest()}
+        """)
         raise
 
 def sample_point_cloud(
