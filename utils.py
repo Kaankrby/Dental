@@ -109,17 +109,15 @@ def load_ascii_stl(path: str) -> o3d.geometry.PointCloud:
     pcd.points = o3d.utility.Vector3dVector(np.unique(vertices, axis=0))
     return pcd
 
-def sample_point_cloud(
-    mesh: o3d.geometry.TriangleMesh,
-    num_points: int,
-    nb_neighbors: int,
-    std_ratio: float
-) -> o3d.geometry.PointCloud:
-    """Sample point cloud from mesh."""
-    pcd = mesh.sample_points_uniformly(number_of_points=num_points)
-    pcd.estimate_normals()
-    pcd = pcd.remove_statistical_outlier(nb_neighbors=nb_neighbors, std_ratio=std_ratio)[0]
-    return pcd
+def sample_point_cloud(pcd: o3d.geometry.PointCloud, num_points: int) -> o3d.geometry.PointCloud:
+    """Uniform sampling for point clouds"""
+    # First try uniform downsampling
+    if len(pcd.points) > num_points:
+        return pcd.uniform_down_sample(every_k_points=len(pcd.points)//num_points)
+        
+    # If not enough points, use random selection
+    indices = np.random.choice(len(pcd.points), num_points, replace=False)
+    return pcd.select_by_index(indices)
 
 def _safe_mesh_volume(mesh: Optional[o3d.geometry.TriangleMesh]) -> Optional[float]:
     """Best-effort attempt to retrieve a mesh volume."""
