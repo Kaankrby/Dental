@@ -110,14 +110,18 @@ def load_ascii_stl(path: str) -> o3d.geometry.PointCloud:
     return pcd
 
 def sample_point_cloud(pcd: o3d.geometry.PointCloud, num_points: int) -> o3d.geometry.PointCloud:
-    """Uniform sampling for point clouds"""
-    # First try uniform downsampling
-    if len(pcd.points) > num_points:
-        return pcd.uniform_down_sample(every_k_points=len(pcd.points)//num_points)
-        
-    # If not enough points, use random selection
-    indices = np.random.choice(len(pcd.points), num_points, replace=False)
-    return pcd.select_by_index(indices)
+    """Safe sampling for point clouds"""
+    if len(pcd.points) <= num_points:
+        return pcd
+    
+    # Uniform downsampling first
+    downsampled = pcd.uniform_down_sample(every_k_points=len(pcd.points)//num_points)
+    
+    # Random sampling if needed
+    if len(downsampled.points) > num_points:
+        indices = np.random.choice(len(downsampled.points), num_points, replace=False)
+        return downsampled.select_by_index(indices)
+    return downsampled
 
 def compute_advanced_metrics(
     source_aligned: o3d.geometry.PointCloud,
