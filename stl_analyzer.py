@@ -138,13 +138,12 @@ def main():
         ref_path = save_uploaded_file(ref_file)
         test_path = save_uploaded_file(test_file)
         
-        # Initialize analyzer with weights
-        analyzer = RhinoAnalyzer(LAYER_WEIGHTS)
-        try:
-            analyzer.load_reference_3dm(ref_path)
-        except ValueError as e:
-            st.error(f"Reference Error: {str(e)}")
-            st.stop()
+        # Initialize analyzer
+        analyzer = RhinoAnalyzer()
+        analyzer.set_weights(LAYER_WEIGHTS)  # Pass weights from UI
+
+        # Remove all mesh validation steps
+        # Focus on point cloud processing
         
         # Process test file
         try:

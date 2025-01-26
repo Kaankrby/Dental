@@ -18,44 +18,11 @@ def performance_monitor(func):
         return result
     return wrapper
 
-@st.cache_resource(show_spinner="Loading mesh...")
-def load_mesh(stl_path: str) -> o3d.geometry.TriangleMesh:
-    """Load and validate mesh."""
-    try:
-        if not os.path.exists(stl_path):
-            raise FileNotFoundError(f"File not found: {stl_path}")
-            
-        file_size = os.path.getsize(stl_path)
-        max_size = 250 * 1024 * 1024  # 250MB
-        if file_size > max_size:
-            raise ValueError(f"File exceeds size limit ({file_size/1e6:.1f}MB > {max_size/1e6}MB)")
-        
-        mesh = o3d.io.read_triangle_mesh(stl_path)
-        
-        # Remove non-triangular faces
-        mesh = mesh.remove_non_manifold_edges()
-        mesh = mesh.remove_degenerate_triangles()
-        mesh = mesh.remove_duplicated_triangles()
-        
-        # New: Explicit check for triangular faces
-        if not mesh.has_triangles():
-            # Get face information
-            triangles = np.asarray(mesh.triangles)
-            if len(triangles) == 0:
-                raise ValueError("Mesh contains no faces")
-                
-            # Check for quad faces
-            quad_faces = [f for f in triangles if len(f) > 3]
-            if quad_faces:
-                raise ValueError(f"Mesh contains {len(quad_faces)} quad/ngon faces - only triangles supported")
-            
-            # Final fallback
-            raise ValueError("Mesh contains invalid triangular definitions")
-
-        return mesh
-    except Exception as e:
-        st.error(f"Mesh Error: {str(e)}")
-        raise
+def load_mesh(file_path: str) -> o3d.geometry.PointCloud:
+    pcd = o3d.io.read_point_cloud(file_path)
+    if len(pcd.points) == 0:
+        raise ValueError("Point cloud is empty")
+    return pcd
 
 def sample_point_cloud(
     mesh: o3d.geometry.TriangleMesh,

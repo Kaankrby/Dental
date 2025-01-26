@@ -168,45 +168,27 @@ class STLAnalyzer:
         return self.results[file_path]
 
 class RhinoAnalyzer:
-    def __init__(self, layer_weights: dict):
-        self.layer_weights = layer_weights
-        self.reference = None  # Will store weighted point cloud
+    def __init__(self):
+        self.layer_weights = {}  # Will be set from UI
+        self.reference = None
+        
+    def set_weights(self, weights: dict):
+        """Update weights from UI"""
+        self.layer_weights = weights
         
     def load_reference_3dm(self, file_path: str):
         """Load Rhino .3dm file with layered meshes"""
         model = rh.File3dm.Read(file_path)
-        found_layers = set()
         weighted_points = []
         
         for obj in model.Objects:
             if isinstance(obj.Geometry, rh.Mesh):
-                rh_mesh = obj.Geometry
+                mesh = obj.Geometry
                 layer = model.Layers.FindIndex(obj.Attributes.LayerIndex)
                 weight = self.layer_weights.get(layer.Name, 1.0)
                 
-                # Convert Rhino mesh vertices
-                vertices = np.array([[v.X, v.Y, v.Z] for v in rh_mesh.Vertices])
-                
-                # Convert faces ensuring triangles
-                triangles = []
-                for face in rh_mesh.Faces:
-                    if face.IsTriangle:
-                        triangles.append([face.A, face.B, face.C])
-                    elif face.IsQuad:
-                        # Split quad into two triangles
-                        triangles.append([face.A, face.B, face.C])
-                        triangles.append([face.A, face.C, face.D])
-                
-                # Create Open3D mesh
-                o3d_mesh = o3d.geometry.TriangleMesh()
-                o3d_mesh.vertices = o3d.utility.Vector3dVector(vertices)
-                o3d_mesh.triangles = o3d.utility.Vector3iVector(triangles)
-                
-                # Validate conversion
-                if len(o3d_mesh.triangles) == 0:
-                    raise ValueError(f"Layer {layer.Name} conversion failed - {len(rh_mesh.Faces)} Rhino faces → {len(triangles)} Open3D triangles")
-                    
-                # Store weights
+                # Directly use vertices
+                vertices = np.array([[v.X, v.Y, v.Z] for v in mesh.Vertices])
                 weights = np.full((len(vertices), 1), weight)
                 weighted_points.append(np.hstack((vertices, weights)))
         
@@ -218,17 +200,6 @@ class RhinoAnalyzer:
             np.tile(all_points[:, 3:], (1, 3))  # Weight as RGB
         )
         self.kdtree = o3d.geometry.KDTreeFlann(self.reference)
-        
-        for obj in model.Objects:
-            if isinstance(obj.Geometry, rh.Mesh):
-                layer = model.Layers.FindIndex(obj.Attributes.LayerIndex)
-                found_layers.add(layer.Name)
-        
-        # Verify required layers
-        required_layers = set(self.layer_weights.keys())
-        missing = required_layers - found_layers
-        if missing:
-            raise ValueError(f"Missing required layers: {', '.join(missing)}")
 
     def calculate_weighted_deviation(self, test_points: np.ndarray) -> dict:
         """Calculate weighted deviations against reference"""
