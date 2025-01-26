@@ -184,19 +184,30 @@ class RhinoAnalyzer:
                 layer = model.Layers.FindIndex(obj.Attributes.LayerIndex)
                 weight = self.layer_weights.get(layer.Name, 1.0)
                 
-                # Convert Rhino mesh to Open3D format
+                # Convert Rhino mesh to triangles
                 o3d_mesh = o3d.geometry.TriangleMesh()
-                o3d_mesh.vertices = o3d.utility.Vector3dVector(
-                    [[v.X, v.Y, v.Z] for v in mesh.Vertices]
-                )
-                o3d_mesh.triangles = o3d.utility.Vector3iVector(
-                    [[f.A, f.B, f.C] for f in mesh.Faces]
-                )
+                vertices = [[v.X, v.Y, v.Z] for v in mesh.Vertices]
+                
+                # Extract and triangulate faces
+                triangles = []
+                for face in mesh.Faces:
+                    if face.IsQuad:
+                        # Split quad into two triangles
+                        triangles.append([face.A, face.B, face.C])
+                        triangles.append([face.A, face.C, face.D])
+                    else:
+                        triangles.append([face.A, face.B, face.C])
+                
+                if not triangles:
+                    raise ValueError(f"Layer {layer.Name} has no valid faces")
+                    
+                o3d_mesh.vertices = o3d.utility.Vector3dVector(vertices)
+                o3d_mesh.triangles = o3d.utility.Vector3iVector(triangles)
                 
                 # Validate mesh
-                if not o3d_mesh.has_triangles():
-                    raise ValueError(f"Layer {layer.Name} has invalid triangles")
-                    
+                if len(o3d_mesh.triangles) == 0:
+                    raise ValueError(f"Layer {layer.Name} failed triangulation")
+                
                 # Process valid mesh
                 vertices = np.asarray(o3d_mesh.vertices)
                 weights = np.full((len(vertices), 1), weight)
