@@ -178,11 +178,18 @@ class RhinoAnalyzer:
         self.voxel_size = voxel_size
         self.num_layers = layers
         
-        # Load and process point cloud
+        # Load point cloud
         raw_pcd = load_mesh(file_path)
+        
+        # Explicitly create the point cloud object
+        if not isinstance(raw_pcd, o3d.geometry.PointCloud):
+            temp_pcd = o3d.geometry.PointCloud()
+            temp_pcd.points = o3d.utility.Vector3dVector(np.asarray(raw_pcd.points))
+            raw_pcd = temp_pcd
+        
         st.info(f"Loaded reference with {len(raw_pcd.points)} points")
         
-        # Call sample_point_cloud with only required arguments
+        # Sample points with explicit argument names
         self.reference_pcd = sample_point_cloud(
             pcd=raw_pcd,
             num_points=num_points

@@ -17,13 +17,15 @@ import hashlib
 from stl import mesh as stl_mesh
 
 def performance_monitor(func):
+    """Decorator to monitor function performance"""
     @wraps(func)
     def wrapper(*args, **kwargs):
         start_time = time.time()
-        result = func(*args, **kwargs)
-        execution_time = time.time() - start_time
-        st.sidebar.metric(f"{func.__name__} Time", f"{execution_time:.2f}s")
-        return result
+        try:
+            return func(*args, **kwargs)
+        finally:
+            end_time = time.time()
+            st.info(f"{func.__name__} took {end_time - start_time:.2f} seconds")
     return wrapper
 
 def load_mesh(stl_path: str) -> o3d.geometry.PointCloud:
@@ -109,6 +111,7 @@ def load_ascii_stl(path: str) -> o3d.geometry.PointCloud:
     pcd.points = o3d.utility.Vector3dVector(np.unique(vertices, axis=0))
     return pcd
 
+@performance_monitor
 def sample_point_cloud(pcd: o3d.geometry.PointCloud, num_points: int) -> o3d.geometry.PointCloud:
     """Sample points from point cloud to target count"""
     if not isinstance(pcd, o3d.geometry.PointCloud):
@@ -116,20 +119,27 @@ def sample_point_cloud(pcd: o3d.geometry.PointCloud, num_points: int) -> o3d.geo
         
     st.info(f"Sampling {num_points} points from cloud of size {len(pcd.points)}")
     
+    # Handle empty or small point clouds
     if len(pcd.points) <= num_points:
         return pcd
         
-    # Use voxel downsampling
+    # Safe volume calculation
     bbox = pcd.get_axis_aligned_bounding_box()
-    volume = np.prod(bbox.get_extent())
-    voxel_size = (volume / num_points) ** (1/3)
+    extent = bbox.get_extent()
+    volume = float(extent[0] * extent[1] * extent[2])
+    
+    # Safe voxel size calculation
+    voxel_size = float((volume / num_points) ** (1/3))
     
     try:
         downsampled = pcd.voxel_down_sample(voxel_size=voxel_size)
-        
+        if not downsampled or len(downsampled.points) == 0:
+            st.warning("Voxel downsampling failed, using original cloud")
+            downsampled = pcd
+            
         # Final random sampling if needed
         if len(downsampled.points) > num_points:
-            points = np.asarray(downsampled.points)
+            points = np.asarray(downsampled.points, dtype=np.float64)
             indices = np.random.choice(len(points), num_points, replace=False)
             result = o3d.geometry.PointCloud()
             result.points = o3d.utility.Vector3dVector(points[indices])
