@@ -10,14 +10,10 @@ import tempfile
 import os
 from processing import RhinoAnalyzer
 from visualization import (
-    plot_point_cloud_heatmap, 
+    plot_point_cloud_heatmap,
     plot_multiple_point_clouds,
     plot_deviation_histogram,
-    plot_normal_angle_distribution,
-    plot_rhino_model,
-    plot_point_cloud_with_normals,
-    plot_registration_result,
-    plot_distance_histogram
+    plot_registration_result
 )
 from utils import validate_file_name, save_uploaded_file, validate_3dm_file, validate_stl_file
 from streamlit.runtime.scriptrunner import get_script_run_ctx
