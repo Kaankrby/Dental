@@ -7,7 +7,6 @@ import os
 from typing import Tuple, List, Dict, Any, Optional
 from functools import wraps
 import tempfile
-import rhinoscriptsyntax as rh
 
 def performance_monitor(func):
     @wraps(func)
