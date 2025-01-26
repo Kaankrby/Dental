@@ -5,3 +5,4 @@ streamlit
 pandas==2.0.3
 plotly==5.18.0
 scipy==1.11.1
+numpy-stl==1.8.0
