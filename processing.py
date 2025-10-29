@@ -346,34 +346,7 @@ class RhinoAnalyzer:
             out.estimate_normals()
         return out
 
-    def _filter_target_for_alignment(self, target_pcd: o3d.geometry.PointCloud) -> o3d.geometry.PointCloud:
-        """Target subset for alignment using nearest-layer classification and weight-prioritized sampling."""
-        pts = np.asarray(target_pcd.points)
-        if len(pts) == 0:
-            return target_pcd
-        nearest_layers = self._nearest_layers(pts)
-        if len(nearest_layers) == 0:
-            return target_pcd
-        weights = np.array([float(self.layer_weights.get(ln, 1.0)) for ln in nearest_layers])
-        keep_mask = (np.char.lower(nearest_layers.astype(str)) != 'notimportant') & (weights > 0)
-        pts_kept = pts[keep_mask]
-        w_kept = weights[keep_mask]
-        if len(pts_kept) == 0:
-            return target_pcd
-        maxw = np.max(w_kept)
-        if maxw <= 0:
-            maxw = 1.0
-        probs = np.clip(w_kept / maxw, 0.0, 1.0)
-        rng = np.random.default_rng()
-        subsample_mask = rng.random(len(pts_kept)) < probs
-        pts_final = pts_kept[subsample_mask]
-        if len(pts_final) < 10:
-            pts_final = pts_kept
-        out = o3d.geometry.PointCloud()
-        out.points = o3d.utility.Vector3dVector(pts_final)
-        if len(out.points) > 3:
-            out.estimate_normals()
-        return out
+    # Do not filter target for alignment prior to an initial transform; mapping is unreliable pre-align.
 
     @performance_monitor
     def add_test_file(self, file_path: str, num_points: int, nb_neighbors: int, std_ratio: float):
@@ -389,7 +362,10 @@ class RhinoAnalyzer:
         voxel_size: float,
         icp_threshold: float,
         max_iter: int,
-        ignore_outside_bbox: bool
+        ignore_outside_bbox: bool,
+        include_notimportant_metrics: bool = False,
+        use_full_ref_global: bool = False,
+        icp_mode: str = 'auto'
     ) -> Dict:
         """Process a single test file and compute metrics with layer-weighted deviations."""
         if self.reference_pcd is None:
@@ -398,18 +374,18 @@ class RhinoAnalyzer:
         # Load target
         test_pcd = self.load_target(file_path, estimate_normals=True)
 
-        # Build filtered clouds for alignment (exclude NOTIMPORTANT and zero-weight)
+        # Build filtered reference for alignment; keep full target for robustness
         ref_for_align = self._filter_reference_for_alignment()
-        tgt_for_align = self._filter_target_for_alignment(test_pcd)
 
         # Initial alignment
         transform_init = np.eye(4)
         if use_global_reg:
             # Reuse STLAnalyzer's pipeline for feature-based init
             # Downsample + FPFH
-            source_down = tgt_for_align.voxel_down_sample(voxel_size=max(voxel_size, 1e-3))
+            source_down = test_pcd.voxel_down_sample(voxel_size=max(voxel_size, 1e-3))
             source_down.estimate_normals()
-            target_down = ref_for_align.voxel_down_sample(voxel_size=max(voxel_size, 1e-3))
+            ref_for_global = self.reference_pcd if use_full_ref_global else ref_for_align
+            target_down = ref_for_global.voxel_down_sample(voxel_size=max(voxel_size, 1e-3))
             target_down.estimate_normals()
             source_fpfh = o3d.pipelines.registration.compute_fpfh_feature(
                 source_down,
@@ -435,27 +411,26 @@ class RhinoAnalyzer:
             transform_init = result_init.transformation
 
         # ICP refinement
-        # Prefer point-to-plane (often more stable) with normals
-        estimation = o3d.pipelines.registration.TransformationEstimationPointToPlane()
-        try:
-            icp_result = o3d.pipelines.registration.registration_icp(
-                tgt_for_align,
+        # Choose estimation based on icp_mode
+        def _run_icp(estimation):
+            return o3d.pipelines.registration.registration_icp(
+                test_pcd,
                 ref_for_align,
                 icp_threshold,
                 transform_init,
                 estimation,
                 o3d.pipelines.registration.ICPConvergenceCriteria(max_iteration=max_iter)
             )
-        except Exception:
-            # Fallback to point-to-point if normals unavailable
-            icp_result = o3d.pipelines.registration.registration_icp(
-                tgt_for_align,
-                ref_for_align,
-                icp_threshold,
-                transform_init,
-                o3d.pipelines.registration.TransformationEstimationPointToPoint(),
-                o3d.pipelines.registration.ICPConvergenceCriteria(max_iteration=max_iter)
-            )
+
+        if icp_mode == 'point_to_point':
+            icp_result = _run_icp(o3d.pipelines.registration.TransformationEstimationPointToPoint())
+        elif icp_mode == 'point_to_plane':
+            icp_result = _run_icp(o3d.pipelines.registration.TransformationEstimationPointToPlane())
+        else:  # auto
+            try:
+                icp_result = _run_icp(o3d.pipelines.registration.TransformationEstimationPointToPlane())
+            except Exception:
+                icp_result = _run_icp(o3d.pipelines.registration.TransformationEstimationPointToPoint())
 
         # Transform test point cloud
         test_aligned = copy.deepcopy(test_pcd)
@@ -468,10 +443,10 @@ class RhinoAnalyzer:
 
         # Compute advanced metrics (raw)
         from utils import compute_advanced_metrics
-        # Exclude NOTIMPORTANT from evaluation
+        # Metrics: include/exclude NOTIMPORTANT independently
         aligned_pts = np.asarray(test_aligned.points)
         nearest_layers = self._nearest_layers(aligned_pts) if len(aligned_pts) else np.array([], dtype=object)
-        if len(nearest_layers):
+        if len(nearest_layers) and not include_notimportant_metrics:
             eval_mask = (np.char.lower(nearest_layers.astype(str)) != 'notimportant') & (
                 np.array([float(self.layer_weights.get(ln, 1.0)) for ln in nearest_layers]) > 0
             )

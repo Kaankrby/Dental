@@ -1,4 +1,4 @@
-import sys
+﻿import sys
 if sys.version_info >= (3, 10):
     import collections.abc
     sys.modules['collections'].Mapping = collections.abc.Mapping
@@ -29,7 +29,7 @@ st.set_page_config(
     page_title="Dental STL Analyzer Pro",
     layout="wide",
     initial_sidebar_state="expanded",
-    page_icon="🦷",
+    page_icon="ğŸ¦·",
 )
 
 # Initialize analyzer once per session
@@ -76,6 +76,12 @@ with st.sidebar:
         disabled=not use_global_registration,
     )
 
+    use_full_ref_global = st.checkbox(
+        "Use full reference for global registration",
+        value=False,
+        help="RANSAC uses the entire reference point cloud instead of filtered important layers.",
+    )
+
     st.subheader("ICP Parameters")
     icp_threshold = st.slider(
         "ICP Threshold (mm)",
@@ -91,10 +97,32 @@ with st.sidebar:
         value=200 if processing_mode == "Balanced" else 500 if processing_mode == "Precision" else 100,
     )
 
+    icp_mode_label = st.selectbox(
+        "ICP Mode",
+        [
+            "Auto (plane→point fallback)",
+            "Point-to-Plane",
+            "Point-to-Point",
+        ],
+        help="Choose the ICP error metric. Point-to-plane is often better for scans with normals.",
+    )
+    icp_mode = {
+        "Auto (plane→point fallback)": "auto",
+        "Point-to-Plane": "point_to_plane",
+        "Point-to-Point": "point_to_point",
+    }[icp_mode_label]
+
     # Visualization
     st.subheader("Visualization")
     point_size = st.slider("Point Size", 1, 10, 3)
     color_scale = st.selectbox("Color Scale", ["viridis", "plasma", "turbo", "hot"])
+
+    # Metrics inclusion toggle for NOTIMPORTANT
+    include_notimportant_metrics = st.checkbox(
+        "Include NOTIMPORTANT in metrics",
+        value=False,
+        help="Controls only metrics; alignment always focuses on important layers."
+    )
 
     # Layer weights editor
     if 'layer_weights' not in st.session_state:
@@ -242,7 +270,7 @@ if st.button("Start Analysis", type="primary", key="start_analysis_v2"):
                         f.write(tf.getbuffer())
                     if not validate_stl_file(test_path):
                         continue
-
+        
                     result = analyzer.process_test_file(
                         test_path,
                         use_global_registration,
@@ -250,6 +278,9 @@ if st.button("Start Analysis", type="primary", key="start_analysis_v2"):
                         icp_threshold,
                         icp_max_iter,
                         True,
+                        include_notimportant_metrics,
+                        use_full_ref_global,
+                        icp_mode,
                     )
                     metrics = result["metrics"]
 
@@ -291,4 +322,3 @@ if st.button("Start Analysis", type="primary", key="start_analysis_v2"):
         except Exception as e:
             st.error(f"Analysis failed: {str(e)}")
             st.exception(e)
-
