@@ -182,46 +182,88 @@ class RhinoAnalyzer:
     def __init__(self):
         self.reference_pcd = None
         self.reference_full = None
+        self.reference_bbox = None
         self.target_pcd = None
         self.voxel_size = None
         self.num_layers = None
-        self.layer_weights = None
+        self.layer_weights = {}
+        # Per-layer and per-point bookkeeping for 3DM
+        self.reference_layers = {}  # layer_name -> np.ndarray[N,3]
+        self._ref_point_layers = None  # np.ndarray[str] per point in reference_pcd
+        self._ref_kdtree = None
 
     @performance_monitor
-    def load_reference(self, file_path: str, num_points: int, layers: int, voxel_size: float):
-        """Load reference as merged point cloud"""
-        # Store parameters
-        self.voxel_size = voxel_size
-        self.num_layers = layers
-        
-        # Load as single merged cloud
-        raw_pcd = load_mesh(file_path)
-        self.reference_full = raw_pcd
-        
-        # Direct sampling
-        points = np.asarray(raw_pcd.points)
-        if len(points) > num_points:
-            indices = np.random.choice(len(points), num_points, replace=False)
-            sampled_points = points[indices]
+    def load_reference_3dm(self, file_path: str, layer_weights: dict, max_points: int = 100000):
+        """Load Rhino .3dm reference and build a combined point cloud with layer mapping."""
+        self.layer_weights = dict(layer_weights or {})
+        model = rh.File3dm.Read(file_path)
+
+        layers = list(model.Layers)
+        self.reference_layers = {}
+        all_points = []
+        all_layer_names = []
+
+        for layer in layers:
+            # Collect vertices from meshes on this layer
+            pts = []
+            for obj in model.Objects:
+                if obj.Attributes.LayerIndex == layer.Index and isinstance(obj.Geometry, rh.Mesh):
+                    for v in obj.Geometry.Vertices:
+                        pts.append([v.X, v.Y, v.Z])
+            if not pts:
+                continue
+            pts = np.unique(np.asarray(pts, dtype=np.float64), axis=0)
+            self.reference_layers[layer.Name] = pts
+
+            # Append and tag
+            all_points.append(pts)
+            all_layer_names.extend([layer.Name] * len(pts))
+
+            # Ensure a default weight exists
+            if layer.Name not in self.layer_weights:
+                self.layer_weights[layer.Name] = 1.0
+
+        if not all_points:
+            raise ValueError("No mesh vertices found in .3dm reference")
+
+        all_points = np.vstack(all_points)
+        all_layer_names = np.array(all_layer_names, dtype=object)
+
+        # Downsample to max_points uniformly
+        if len(all_points) > max_points:
+            idx = np.random.choice(len(all_points), max_points, replace=False)
+            sampled_points = all_points[idx]
+            sampled_layers = all_layer_names[idx]
         else:
-            sampled_points = points
-            
-        # Create sampled point cloud
+            sampled_points = all_points
+            sampled_layers = all_layer_names
+
         self.reference_pcd = o3d.geometry.PointCloud()
         self.reference_pcd.points = o3d.utility.Vector3dVector(sampled_points)
-        
-        st.info(f"Loaded reference with {len(sampled_points)} points")
+        # Estimate normals for metric computations
+        if len(sampled_points) > 3:
+            self.reference_pcd.estimate_normals()
+        self.reference_full = self.reference_pcd
+        self.reference_bbox = self.reference_pcd.get_axis_aligned_bounding_box()
+
+        # Build KDTree and per-point layer mapping
+        self._ref_point_layers = sampled_layers
+        self._ref_kdtree = o3d.geometry.KDTreeFlann(self.reference_pcd)
+
+        st.info(f"Loaded 3DM reference with {len(sampled_points)} points across {len(self.reference_layers)} layers")
         return self.reference_pcd
 
     @performance_monitor
-    def load_target(self, file_path: str):
-        """Load target file"""
+    def load_target(self, file_path: str, estimate_normals: bool = True):
+        """Load target STL/mesh into point cloud."""
         target_pcd = load_mesh(file_path)
         points = np.asarray(target_pcd.points)
-        
+
         self.target_pcd = o3d.geometry.PointCloud()
         self.target_pcd.points = o3d.utility.Vector3dVector(points)
-        
+        if estimate_normals and len(points) > 3:
+            self.target_pcd.estimate_normals()
+
         st.info(f"Loaded target with {len(points)} points")
         return self.target_pcd
 
@@ -251,14 +293,126 @@ class RhinoAnalyzer:
             'coverage': 0.0        # Placeholder
         }
 
-    def apply_layer_weights(self, points: np.ndarray, layers: np.ndarray) -> np.ndarray:
-        """Safe layer weight application"""
-        valid_layers = [i for i in np.unique(layers) if i in self.layer_weights]
-        if not valid_layers:
-            raise ValueError("No matching layers between reference and target")
-            
-        weights = np.array([self.layer_weights.get(l, 1.0) for l in layers])
-        return points * weights.reshape(-1, 1)
+    def get_reference_layers(self):
+        return list(self.reference_layers.keys()) if self.reference_layers else []
+
+    def get_target_layers(self):
+        # Targets are STL without layers; return empty list for now
+        return []
+
+    def _nearest_layer_weights(self, points: np.ndarray) -> np.ndarray:
+        """For each point, find nearest reference point's layer and return weights."""
+        if self._ref_kdtree is None or self._ref_point_layers is None:
+            return np.ones(len(points))
+        weights = np.ones(len(points), dtype=np.float64)
+        for i, p in enumerate(points):
+            _, idx, _ = self._ref_kdtree.search_knn_vector_3d(p, 1)
+            layer_name = self._ref_point_layers[idx[0]]
+            weights[i] = float(self.layer_weights.get(layer_name, 1.0))
+        return weights
+
+    def apply_layer_weights(self, distances: np.ndarray, points: np.ndarray) -> np.ndarray:
+        """Apply layer weights to per-point distances based on nearest reference layer."""
+        if len(distances) != len(points):
+            raise ValueError("Distances and points length mismatch")
+        lw = self._nearest_layer_weights(points)
+        return distances * lw
+
+    @performance_monitor
+    def add_test_file(self, file_path: str, num_points: int, nb_neighbors: int, std_ratio: float):
+        """For API compatibility. No internal storage needed for multi-file pipeline."""
+        # This method can remain a no-op since process step will load per-file
+        return True
+
+    @performance_monitor
+    def process_test_file(
+        self,
+        file_path: str,
+        use_global_reg: bool,
+        voxel_size: float,
+        icp_threshold: float,
+        max_iter: int,
+        ignore_outside_bbox: bool
+    ) -> Dict:
+        """Process a single test file and compute metrics with layer-weighted deviations."""
+        if self.reference_pcd is None:
+            raise ValueError("Reference not loaded")
+
+        # Load target
+        test_pcd = self.load_target(file_path, estimate_normals=True)
+
+        # Initial alignment
+        transform_init = np.eye(4)
+        if use_global_reg:
+            # Reuse STLAnalyzer's pipeline for feature-based init
+            # Downsample + FPFH
+            source_down = test_pcd.voxel_down_sample(voxel_size=max(voxel_size, 1e-3))
+            source_down.estimate_normals()
+            target_down = self.reference_pcd.voxel_down_sample(voxel_size=max(voxel_size, 1e-3))
+            target_down.estimate_normals()
+            source_fpfh = o3d.pipelines.registration.compute_fpfh_feature(
+                source_down,
+                o3d.geometry.KDTreeSearchParamHybrid(radius=5.0*voxel_size, max_nn=100)
+            )
+            target_fpfh = o3d.pipelines.registration.compute_fpfh_feature(
+                target_down,
+                o3d.geometry.KDTreeSearchParamHybrid(radius=5.0*voxel_size, max_nn=100)
+            )
+            result_init = o3d.pipelines.registration.registration_ransac_based_on_feature_matching(
+                source_down, target_down,
+                source_fpfh, target_fpfh,
+                mutual_filter=True,
+                max_correspondence_distance=voxel_size * 1.5,
+                estimation_method=o3d.pipelines.registration.TransformationEstimationPointToPoint(False),
+                ransac_n=4,
+                checkers=[
+                    o3d.pipelines.registration.CorrespondenceCheckerBasedOnEdgeLength(0.9),
+                    o3d.pipelines.registration.CorrespondenceCheckerBasedOnDistance(voxel_size * 1.5)
+                ],
+                criteria=o3d.pipelines.registration.RANSACConvergenceCriteria(4000000, 500)
+            )
+            transform_init = result_init.transformation
+
+        # ICP refinement
+        icp_result = o3d.pipelines.registration.registration_icp(
+            test_pcd,
+            self.reference_pcd,
+            icp_threshold,
+            transform_init,
+            o3d.pipelines.registration.TransformationEstimationPointToPoint(),
+            o3d.pipelines.registration.ICPConvergenceCriteria(max_iteration=max_iter)
+        )
+
+        # Transform test point cloud
+        test_aligned = copy.deepcopy(test_pcd)
+        test_aligned.transform(icp_result.transformation)
+
+        # Filter by bounding box if requested
+        if ignore_outside_bbox and self.reference_bbox is not None:
+            indices = self.reference_bbox.get_point_indices_within_bounding_box(test_aligned.points)
+            test_aligned = test_aligned.select_by_index(indices)
+
+        # Compute advanced metrics (raw)
+        from utils import compute_advanced_metrics
+        metrics = compute_advanced_metrics(test_aligned, self.reference_pcd)
+        metrics.update({
+            'fitness': icp_result.fitness,
+            'inlier_rmse': icp_result.inlier_rmse,
+            'transformation': icp_result.transformation
+        })
+
+        # Compute layer-weighted deviations
+        aligned_points = np.asarray(test_aligned.points)
+        raw_dists = metrics['distances']
+        weighted_dists = self.apply_layer_weights(raw_dists, aligned_points)
+        metrics['mean_weighted_deviation'] = float(np.mean(weighted_dists))
+        metrics['max_weighted_deviation'] = float(np.max(weighted_dists))
+        metrics['weighted_distances'] = weighted_dists
+
+        return {
+            'metrics': metrics,
+            'aligned_pcd': test_aligned
+        }
 
     def calculate_weighted_deviation(self, test_points: np.ndarray) -> dict:
         """Calculate weighted deviations against reference"""

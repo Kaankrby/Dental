@@ -13,7 +13,8 @@ from visualization import (
     plot_point_cloud_heatmap,
     plot_multiple_point_clouds,
     plot_deviation_histogram,
-    plot_registration_result
+    plot_registration_result,
+    plot_rhino_model
 )
 from utils import validate_file_name, save_uploaded_file, validate_3dm_file, validate_stl_file
 from streamlit.runtime.scriptrunner import get_script_run_ctx
@@ -138,7 +139,7 @@ with st.expander("📤 Upload Files", expanded=True):
     col1, col2 = st.columns(2)
     
     with col1:
-        st.subheader("Reference STL")
+        st.subheader("Reference 3DM")
         ref_file = st.file_uploader(
             "Upload Reference .3dm", 
             type=["3dm"],
@@ -147,10 +148,11 @@ with st.expander("📤 Upload Files", expanded=True):
         
     with col2:
         st.subheader("Test STL(s)")
-        test_file = st.file_uploader(
-            "Upload Test STL", 
+        test_files = st.file_uploader(
+            "Upload Test STL(s)", 
             type=["stl"],
-            help="Scan file to analyze against reference"
+            accept_multiple_files=True,
+            help="Scan file(s) to analyze against reference"
         )
 
 # Layer weight configuration
@@ -416,3 +418,81 @@ def show_analysis_results(analyzer, transformed):
             ['Reference', 'Target']
         )
         st.plotly_chart(fig, use_container_width=True)
+
+# -------------------------------------------------
+# New Analysis (3DM reference + multi STL)
+# -------------------------------------------------
+def _populate_layer_weights_from_3dm(uploaded_ref_file):
+    try:
+        tmp = save_uploaded_file(uploaded_ref_file)
+        model = rh.File3dm.Read(tmp)
+        layer_names = [layer.Name for layer in model.Layers]
+        if layer_names:
+            current = st.session_state.get('layer_weights', {})
+            for ln in layer_names:
+                if ln not in current:
+                    current[ln] = 1.0
+            st.session_state.layer_weights = current
+            analyzer = st.session_state['analyzer']
+            analyzer.layer_weights = current
+    except Exception:
+        pass
+
+if st.button('Start Analysis (3DM + Multi-STL)', type='primary', key='start_analysis_v2'):
+    if 'ref_file' not in locals() or not ref_file:
+        st.error('Please upload a reference .3dm file!')
+    elif 'test_files' not in locals() or not test_files:
+        st.error('Please upload at least one test STL file!')
+    else:
+        try:
+            analyzer = st.session_state['analyzer']
+            with tempfile.TemporaryDirectory() as temp_dir:
+                ref_path = os.path.join(temp_dir, 'reference.3dm')
+                with open(ref_path, 'wb') as f:
+                    f.write(ref_file.getbuffer())
+                validate_3dm_file(ref_path)
+                if not st.session_state.get('layer_weights'):
+                    _populate_layer_weights_from_3dm(ref_file)
+                analyzer.load_reference_3dm(ref_path, st.session_state.get('layer_weights', {}), max_points=num_points)
+
+                for i, tf in enumerate(test_files, start=1):
+                    st.write(f'Processing: {tf.name}')
+                    test_path = os.path.join(temp_dir, f'test_{i}.stl')
+                    with open(test_path, 'wb') as f:
+                        f.write(tf.getbuffer())
+                    if not validate_stl_file(test_path):
+                        continue
+                    result = analyzer.process_test_file(
+                        test_path,
+                        use_global_registration,
+                        voxel_size_global,
+                        icp_threshold,
+                        icp_max_iter,
+                        True
+                    )
+                    metrics = result['metrics']
+                    with st.expander(f'Results: {tf.name}', expanded=True):
+                        c1, c2 = st.columns(2)
+                        with c1:
+                            st.metric('Mean Deviation', f"{metrics['mean_deviation']:.3f} mm")
+                            st.metric('Max Deviation', f"{metrics['max_deviation']:.3f} mm")
+                            st.metric('Mean Weighted', f"{metrics['mean_weighted_deviation']:.3f} mm")
+                            st.metric('Max Weighted', f"{metrics['max_weighted_deviation']:.3f} mm")
+                        with c2:
+                            dist = np.asarray(metrics['distances'])
+                            wdist = np.asarray(metrics['weighted_distances'])
+                            fig1 = plot_deviation_histogram(dist, title='Raw Deviation Distribution')
+                            fig2 = plot_deviation_histogram(wdist, title='Weighted Deviation Distribution')
+                            st.plotly_chart(fig1, use_container_width=True)
+                            st.plotly_chart(fig2, use_container_width=True)
+                        overlay = plot_multiple_point_clouds([result['aligned_pcd'], analyzer.reference_pcd], ['Aligned Test', 'Reference'])
+                        st.plotly_chart(overlay, use_container_width=True)
+                        aligned_points = np.asarray(result['aligned_pcd'].points)
+                        export_df = pd.DataFrame(
+                            np.column_stack((aligned_points, dist, wdist)),
+                            columns=['X','Y','Z','Deviation','WeightedDeviation']
+                        )
+                        st.download_button(f'Download Results (CSV) - {tf.name}', export_df.to_csv(index=False).encode('utf-8'), f'results_{i}.csv', 'text/csv')
+        except Exception as e:
+            st.error(f'Analysis failed: {str(e)}')
+            st.exception(e)
