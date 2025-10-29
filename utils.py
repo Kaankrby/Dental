@@ -153,10 +153,15 @@ def save_uploaded_file(uploaded_file):
         return f.name
 
 def validate_3dm_file(file_path: str):
-    """Check if file is valid Rhino .3dm"""
+    """Check if file is valid Rhino .3dm with at least one mesh object."""
     try:
         model = rh.File3dm.Read(file_path)
-        if model.Objects.Count == 0:
+        # Ensure object table is not empty
+        if len(model.Objects) == 0:
+            raise ValueError("No objects found in .3dm file")
+        # Ensure there is at least one mesh
+        mesh_count = sum(1 for obj in model.Objects if isinstance(obj.Geometry, rh.Mesh))
+        if mesh_count == 0:
             raise ValueError("No meshes found in .3dm file")
         return True
     except Exception as e:

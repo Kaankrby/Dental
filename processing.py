@@ -374,14 +374,27 @@ class RhinoAnalyzer:
             transform_init = result_init.transformation
 
         # ICP refinement
-        icp_result = o3d.pipelines.registration.registration_icp(
-            test_pcd,
-            self.reference_pcd,
-            icp_threshold,
-            transform_init,
-            o3d.pipelines.registration.TransformationEstimationPointToPoint(),
-            o3d.pipelines.registration.ICPConvergenceCriteria(max_iteration=max_iter)
-        )
+        # Prefer point-to-plane (often more stable) with normals
+        estimation = o3d.pipelines.registration.TransformationEstimationPointToPlane()
+        try:
+            icp_result = o3d.pipelines.registration.registration_icp(
+                test_pcd,
+                self.reference_pcd,
+                icp_threshold,
+                transform_init,
+                estimation,
+                o3d.pipelines.registration.ICPConvergenceCriteria(max_iteration=max_iter)
+            )
+        except Exception:
+            # Fallback to point-to-point if normals unavailable
+            icp_result = o3d.pipelines.registration.registration_icp(
+                test_pcd,
+                self.reference_pcd,
+                icp_threshold,
+                transform_init,
+                o3d.pipelines.registration.TransformationEstimationPointToPoint(),
+                o3d.pipelines.registration.ICPConvergenceCriteria(max_iteration=max_iter)
+            )
 
         # Transform test point cloud
         test_aligned = copy.deepcopy(test_pcd)
