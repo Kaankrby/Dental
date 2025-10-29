@@ -8,16 +8,17 @@ import numpy as np
 import pandas as pd
 import tempfile
 import os
-from processing import STLAnalyzer, RhinoAnalyzer
+from processing import RhinoAnalyzer
 from visualization import (
-    plot_point_cloud_heatmap, 
+    plot_point_cloud_heatmap,
     plot_multiple_point_clouds,
     plot_deviation_histogram,
-    plot_normal_angle_distribution
+    plot_registration_result
 )
 from utils import validate_file_name, save_uploaded_file, validate_3dm_file, validate_stl_file
 from streamlit.runtime.scriptrunner import get_script_run_ctx
 import open3d as o3d
+import rhino3dm as rh
 
 # -------------------------------------------------
 # Configuration
@@ -33,7 +34,7 @@ st.set_page_config(
 ctx = get_script_run_ctx()
 if ctx and not hasattr(ctx, "_is_replicated"):
     if 'analyzer' not in st.session_state:
-        st.session_state['analyzer'] = STLAnalyzer()
+        st.session_state['analyzer'] = RhinoAnalyzer()
 
 # -------------------------------------------------
 # Sidebar Controls
@@ -93,6 +94,37 @@ with st.sidebar:
         ["viridis", "plasma", "turbo", "hot"]
     )
     
+    # Replace the layer weight definition with:
+    if 'layer_weights' not in st.session_state:
+        st.session_state.layer_weights = {
+            "0.1": 1.0,
+            "0.4": 0.8,
+            "1": 0.6,
+            "NOTIMPORTANT": 0.4
+        }
+
+    # Editable weight table
+    st.subheader("⚖️ Layer Weights")
+    weight_df = pd.DataFrame(
+        list(st.session_state.layer_weights.items()),
+        columns=["Layer", "Weight"]
+    )
+    edited_df = st.data_editor(
+        weight_df,
+        use_container_width=True,
+        num_rows="dynamic"
+    )
+    st.session_state.layer_weights = edited_df.set_index('Layer')['Weight'].to_dict()
+
+    # Update analyzer with current weights
+    analyzer = st.session_state['analyzer']
+    analyzer.layer_weights = st.session_state.layer_weights
+
+    if not st.session_state.layer_weights:
+        # Initialize with layers from both files
+        all_layers = set(analyzer.get_reference_layers()) | set(analyzer.get_target_layers())
+        st.session_state.layer_weights = {layer: 1.0 for layer in all_layers}
+
 # -------------------------------------------------
 # Main Interface
 # -------------------------------------------------
@@ -107,19 +139,18 @@ with st.expander("📤 Upload Files", expanded=True):
     
     with col1:
         st.subheader("Reference STL")
-        reference_file = st.file_uploader(
-            "Upload reference (ideal) STL",
-            type=["stl"],
-            key="ref_uploader"
+        ref_file = st.file_uploader(
+            "Upload Reference .3dm", 
+            type=["3dm"],
+            help="Rhino file with layered meshes (NOTIMPORTANT, Layer1, Layer2, BaseLayer)"
         )
         
     with col2:
         st.subheader("Test STL(s)")
-        test_files = st.file_uploader(
-            "Upload test STL(s) for comparison",
+        test_file = st.file_uploader(
+            "Upload Test STL", 
             type=["stl"],
-            accept_multiple_files=True,
-            key="test_uploader"
+            help="Scan file to analyze against reference"
         )
 
 # Layer weight configuration
@@ -129,6 +160,31 @@ LAYER_WEIGHTS = {
     "Layer2": 1.0,
     "BaseLayer": 1.0  # Example additional layer
 }
+
+def show_file_preview(file, title="File Preview"):
+    """Show preview of uploaded file"""
+    if file is not None:
+        col1, col2 = st.columns(2)
+        with col1:
+            st.write(f"**{title}**")
+            st.write(f"Filename: `{file.name}`")
+            st.write(f"Size: `{file.size/1024:.1f} KB`")
+            
+        with col2:
+            # Read first few bytes to determine file type
+            header = file.read(80)
+            file.seek(0)  # Reset position
+            
+            try:
+                header_text = header.decode('utf-8', errors='ignore').strip()
+                st.write("Header Preview:")
+                st.code(header_text[:40] + "..." if len(header_text) > 40 else header_text)
+            except:
+                st.write("Binary file detected")
+                
+            # Show hex preview
+            st.write("Hex Preview:")
+            st.code(header.hex()[:60] + "...")
 
 def main():
     st.title("3DM Weighted Deviation Analyzer")
@@ -142,12 +198,20 @@ def main():
         ref_path = save_uploaded_file(ref_file)
         test_path = save_uploaded_file(test_file)
         
-        # Initialize analyzer with weights
-        analyzer = RhinoAnalyzer(LAYER_WEIGHTS)
-        analyzer.load_reference_3dm(ref_path)
+        # Initialize analyzer
+        analyzer = RhinoAnalyzer()
+        analyzer.set_weights(LAYER_WEIGHTS)  # Pass weights from UI
+
+        # Remove all mesh validation steps
+        # Focus on point cloud processing
         
         # Process test file
-        test_mesh = o3d.io.read_triangle_mesh(test_path)
+        try:
+            test_mesh = o3d.io.read_triangle_mesh(test_path)
+        except Exception as e:
+            st.error(f"Test STL Error: {str(e)}")
+            st.stop()
+        
         test_pcd = test_mesh.sample_points_uniformly(10000)
         test_points = np.asarray(test_pcd.points)
         
@@ -187,26 +251,14 @@ def main():
 
 # Analysis Execution
 if st.button("🚀 Start Analysis", type="primary"):
-    if not reference_file:
+    if not ref_file:
         st.error("Please upload a reference STL file!")
         st.stop()
         
-    if not test_files:
-        st.error("Please upload at least one test STL file!")
+    if not test_file:
+        st.error("Please upload a test STL file!")
         st.stop()
-
-    if not validate_file_name(reference_file.name):
-        st.error("Reference file name is invalid. Please upload an `.stl` file with standard characters.")
-        st.stop()
-
-    invalid_tests = [
-        test_file.name for test_file in test_files
-        if not validate_file_name(test_file.name)
-    ]
-    if invalid_tests:
-        st.error(f"Invalid test file name(s): {', '.join(invalid_tests)}. Please rename to alphanumeric/underscore/dash and `.stl` extension.")
-        st.stop()
-
+        
     try:
         analyzer = st.session_state['analyzer']
         progress_bar = st.progress(0)
@@ -217,117 +269,98 @@ if st.button("🚀 Start Analysis", type="primary"):
             status_text.markdown("🔍 **Processing reference file...**")
             ref_path = os.path.join(temp_dir, "reference.stl")
             with open(ref_path, "wb") as f:
-                f.write(reference_file.getbuffer())
+                f.write(ref_file.getbuffer())
                 
             analyzer.load_reference(ref_path, num_points, 20, 2.0)
             progress_bar.progress(10)
             
-            # Process test files
-            results = {}
-            for i, test_file in enumerate(test_files):
-                status_text.markdown(f"🔬 **Processing test file {i+1}/{len(test_files)}: {test_file.name}...**")
-                test_path = os.path.join(temp_dir, f"test_{test_file.name}")
-                with open(test_path, "wb") as f:
-                    test_file.seek(0)
-                    f.write(test_file.getbuffer())
-                
-                analyzer.add_test_file(test_path, num_points, 20, 2.0)
-                progress_bar.progress(10 + int(30*(i+1)/len(test_files)))
-                
-                # Run analysis
-                result = analyzer.process_test_file(
-                    test_path,
-                    use_global_registration,
-                    voxel_size_global,
-                    icp_threshold,
-                    icp_max_iter,
-                    True
-                )
-                results[test_file.name] = result
-                progress_bar.progress(40 + int(50*(i+1)/len(test_files)))
+            # Process test file
+            status_text.markdown("🔬 **Processing test file...**")
+            test_path = os.path.join(temp_dir, "test.stl")
+            with open(test_path, "wb") as f:
+                f.write(test_file.getbuffer())
+            
+            analyzer.add_test_file(test_path, num_points, 20, 2.0)
+            progress_bar.progress(40)
+            
+            # Run analysis
+            result = analyzer.process_test_file(
+                test_path,
+                use_global_registration,
+                voxel_size_global,
+                icp_threshold,
+                icp_max_iter,
+                True
+            )
             
             # Display results
             status_text.markdown("📊 **Generating visualizations...**")
             progress_bar.progress(90)
             
-            for test_name, result in results.items():
-                with st.expander(f"📌 Results: {test_name}", expanded=True):
-                    col_metrics, col_viz = st.columns([1, 2])
+            with st.expander("📌 Results", expanded=True):
+                col_metrics, col_viz = st.columns([1, 2])
+                
+                with col_metrics:
+                    st.subheader("📈 Metrics Summary")
+                    metrics = result['metrics']
                     
-                    with col_metrics:
-                        st.subheader("📈 Metrics Summary")
-                        metrics = result['metrics']
+                    metric_cols = st.columns(2)
+                    with metric_cols[0]:
+                        st.metric("Mean Deviation", f"{metrics['mean_deviation']:.3f} mm")
+                        st.metric("Volume Similarity", f"{metrics['volume_similarity']*100:.1f}%")
                         
-                        metric_cols = st.columns(2)
-                        with metric_cols[0]:
-                            st.metric("Mean Deviation", f"{metrics['mean_deviation']:.3f} mm")
-                            st.metric("Volume Similarity", f"{metrics['volume_similarity']*100:.1f}%")
-                            
-                        with metric_cols[1]:
-                            st.metric("Max Deviation", f"{metrics['max_deviation']:.3f} mm")
-                            st.metric("Normal Alignment", f"{metrics['mean_normal_angle']:.1f}°")
-                            
-                        metrics_df = pd.DataFrame({
-                            'Value': [
-                                f"{metrics['fitness']:.4f}",
-                                f"{metrics['inlier_rmse']:.4f}",
-                                f"{metrics['hausdorff_distance']:.4f}",
-                                f"{metrics['volume_difference']:.4f}",
-                                f"{metrics['center_of_mass_distance']:.4f}"
-                            ]
-                        }, index=['Fitness', 'RMSE', 'Hausdorff', 'Volume Diff', 'CoM Distance'])
-                        st.dataframe(metrics_df)
-                    
-                    with col_viz:
-                        st.subheader("Deviation Analysis")
-                        aligned_points = np.asarray(result['aligned_pcd'].points)
-                        distances = np.asarray(metrics['distances'])
+                    with metric_cols[1]:
+                        st.metric("Max Deviation", f"{metrics['max_deviation']:.3f} mm")
+                        st.metric("Normal Alignment", f"{metrics['mean_normal_angle']:.1f}°")
+                        
+                    metrics_df = pd.DataFrame({
+                        'Value': [
+                            f"{metrics['fitness']:.4f}",
+                            f"{metrics['inlier_rmse']:.4f}",
+                            f"{metrics['hausdorff_distance']:.4f}",
+                            f"{metrics['volume_difference']:.4f}",
+                            f"{metrics['center_of_mass_distance']:.4f}"
+                        ]
+                    }, index=['Fitness', 'RMSE', 'Hausdorff', 'Volume Diff', 'CoM Distance'])
+                    st.dataframe(metrics_df)
+                
+                with col_viz:
+                    st.subheader("Deviation Analysis")
+                    aligned_points = np.asarray(result['aligned_pcd'].points)
+                    distances = np.asarray(metrics['distances'])
 
-                        col3, col4 = st.columns(2)
-                        with col3:
-                            # 3D deviation map
-                            fig_heatmap = plot_point_cloud_heatmap(
-                                aligned_points,
-                                distances,
-                                point_size,
-                                color_scale,
-                                f"Deviation Map: {test_file.name}"
-                            )
-                            st.plotly_chart(fig_heatmap, use_container_width=True)
-
-                        with col4:
-                            # Histogram
-                            fig_hist = plot_deviation_histogram(
-                                distances,
-                                title=f"Deviation Distribution: {test_file.name}"
-                            )
-                            st.plotly_chart(fig_hist, use_container_width=True)
-
-                        st.subheader("Normal Alignment")
-                        normal_angles = np.asarray(metrics['normal_angles'])
-                        if normal_angles.size:
-                            fig_normals = plot_normal_angle_distribution(
-                                aligned_points,
-                                normal_angles,
-                                point_size,
-                                color_scale
-                            )
-                            st.plotly_chart(fig_normals, use_container_width=True)
-                        else:
-                            st.info("Normal vectors unavailable for visualization.")
-
-                        # Export options
-                        export_data = pd.DataFrame(
-                            np.column_stack((aligned_points, distances)),
-                            columns=['X', 'Y', 'Z', 'Deviation']
+                    col3, col4 = st.columns(2)
+                    with col3:
+                        # 3D deviation map
+                        fig_heatmap = plot_point_cloud_heatmap(
+                            aligned_points,
+                            distances,
+                            point_size,
+                            color_scale,
+                            "Deviation Map"
                         )
+                        st.plotly_chart(fig_heatmap, use_container_width=True)
 
-                        st.download_button(
-                            "📥 Download Results (CSV)",
-                            export_data.to_csv(index=False).encode('utf-8'),
-                            f"results_{test_file.name}.csv",
-                            "text/csv"
+                    with col4:
+                        # Histogram
+                        fig_hist = plot_deviation_histogram(
+                            distances,
+                            title="Deviation Distribution"
                         )
+                        st.plotly_chart(fig_hist, use_container_width=True)
+
+                    # Export options
+                    export_data = pd.DataFrame(
+                        np.column_stack((aligned_points, distances)),
+                        columns=['X', 'Y', 'Z', 'Deviation']
+                    )
+
+                    st.download_button(
+                        "📥 Download Results (CSV)",
+                        export_data.to_csv(index=False).encode('utf-8'),
+                        "results.csv",
+                        "text/csv"
+                    )
             
             progress_bar.progress(100)
             st.success("✅ Analysis completed successfully!")
@@ -336,3 +369,50 @@ if st.button("🚀 Start Analysis", type="primary"):
     except Exception as e:
         st.error(f"❌ Analysis failed: {str(e)}")
         st.exception(e)
+
+# After file upload but before processing
+if ref_file:
+    st.subheader("🔍 Reference File Preview")
+    
+    # Save and load temporary file
+    ref_path = save_uploaded_file(ref_file)
+    model = rh.File3dm.Read(ref_path)
+    
+    # Layer overview
+    with st.expander("📊 Layer Summary"):
+        layers = {layer.Name: layer for layer in model.Layers}
+        layer_table = pd.DataFrame.from_dict({
+            "Layer": [layer.Name for layer in model.Layers],
+            "Object Count": [
+                sum(1 for obj in model.Objects if obj.Attributes.LayerIndex == layer.Index)
+                for layer in model.Layers
+            ],
+            "Weight": [LAYER_WEIGHTS.get(layer.Name, 1.0) for layer in model.Layers]
+        })
+        st.dataframe(layer_table)
+    
+    # 3D Preview
+    with st.expander("🖼️ 3D Preview"):
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            plot = plot_rhino_model(model)
+            st.plotly_chart(plot, use_container_width=True)
+        with col2:
+            st.metric("Total Layers", len(layers))
+            st.metric("Total Meshes", sum(1 for obj in model.Objects if isinstance(obj.Geometry, rh.Mesh)))
+            st.metric("Total Vertices", sum(len(obj.Geometry.Vertices) 
+                                          for obj in model.Objects if isinstance(obj.Geometry, rh.Mesh)))
+
+def show_analysis_results(analyzer, transformed):
+    # Existing visualization pipeline
+    col1, col2 = st.columns(2)
+    with col1:
+        fig = plot_point_cloud_heatmap(analyzer.reference)
+        st.plotly_chart(fig, use_container_width=True)
+        
+    with col2:
+        fig = plot_multiple_point_clouds(
+            [analyzer.reference, transformed],
+            ['Reference', 'Target']
+        )
+        st.plotly_chart(fig, use_container_width=True)

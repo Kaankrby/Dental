@@ -2,8 +2,9 @@ import open3d as o3d
 import numpy as np
 import streamlit as st
 from typing import Tuple, Optional, Dict, Any
-from utils import performance_monitor, load_mesh, sample_point_cloud
+from utils import performance_monitor, load_mesh
 import rhino3dm as rh
+import copy
 
 class STLAnalyzer:
     def __init__(self):
@@ -14,16 +15,30 @@ class STLAnalyzer:
         self.results = {}
 
     @performance_monitor
-    def load_reference(self, file_path: str, num_points: int, nb_neighbors: int, std_ratio: float):
-        """Load and process reference STL file."""
-        self.reference_mesh = load_mesh(file_path)
-        self.reference_pcd = sample_point_cloud(
-            self.reference_mesh,
-            num_points,
-            nb_neighbors,
-            std_ratio
-        )
-        self.reference_bbox = self.reference_pcd.get_axis_aligned_bounding_box()
+    def load_reference(self, file_path: str, num_points: int, layers: int, voxel_size: float):
+        """Load reference as merged point cloud"""
+        # Store parameters
+        self.voxel_size = voxel_size
+        self.num_layers = layers
+        
+        # Load as single merged cloud
+        raw_pcd = load_mesh(file_path)
+        self.reference_full = raw_pcd
+        
+        # Direct sampling
+        points = np.asarray(raw_pcd.points)
+        if len(points) > num_points:
+            indices = np.random.choice(len(points), num_points, replace=False)
+            sampled_points = points[indices]
+        else:
+            sampled_points = points
+            
+        # Create sampled point cloud
+        self.reference_pcd = o3d.geometry.PointCloud()
+        self.reference_pcd.points = o3d.utility.Vector3dVector(sampled_points)
+        
+        st.info(f"Loaded reference with {len(sampled_points)} points")
+        return self.reference_pcd
 
     @performance_monitor
     def add_test_file(self, file_path: str, num_points: int, nb_neighbors: int, std_ratio: float):
@@ -165,25 +180,77 @@ class STLAnalyzer:
 
 class RhinoAnalyzer:
     def __init__(self):
-        self.layer_weights = {}  # Will be set from UI
-        self.reference = None
-        
-    def set_weights(self, weights: dict):
-        """Update weights from UI"""
-        self.layer_weights = weights
-        
+        self.reference_pcd = None
+        self.reference_full = None
+        self.target_pcd = None
+        self.voxel_size = None
+        self.num_layers = None
+        self.layer_weights = None
+
+    @performance_monitor
     def load_reference(self, file_path: str, num_points: int, layers: int, voxel_size: float):
-        # Load point cloud
+        """Load reference as merged point cloud"""
+        # Store parameters
+        self.voxel_size = voxel_size
+        self.num_layers = layers
+        
+        # Load as single merged cloud
         raw_pcd = load_mesh(file_path)
-        self.reference_pcd = sample_point_cloud(raw_pcd, num_points)
+        self.reference_full = raw_pcd
         
-        # Layer validation
-        if not (1 <= layers <= 4):
-            raise ValueError("Dental layers must be between 1-4")
+        # Direct sampling
+        points = np.asarray(raw_pcd.points)
+        if len(points) > num_points:
+            indices = np.random.choice(len(points), num_points, replace=False)
+            sampled_points = points[indices]
+        else:
+            sampled_points = points
             
-        # Initialize layer weights for BOTH files
-        self.layer_weights = {i: 1.0 for i in range(layers)}
+        # Create sampled point cloud
+        self.reference_pcd = o3d.geometry.PointCloud()
+        self.reference_pcd.points = o3d.utility.Vector3dVector(sampled_points)
         
+        st.info(f"Loaded reference with {len(sampled_points)} points")
+        return self.reference_pcd
+
+    @performance_monitor
+    def load_target(self, file_path: str):
+        """Load target file"""
+        target_pcd = load_mesh(file_path)
+        points = np.asarray(target_pcd.points)
+        
+        self.target_pcd = o3d.geometry.PointCloud()
+        self.target_pcd.points = o3d.utility.Vector3dVector(points)
+        
+        st.info(f"Loaded target with {len(points)} points")
+        return self.target_pcd
+
+    def analyze_with_layers(self, target_pcd: o3d.geometry.PointCloud, transformation: np.ndarray):
+        """Second stage: Detailed analysis using layers"""
+        # Apply initial transformation
+        target_transformed = copy.deepcopy(target_pcd)
+        target_transformed.transform(transformation)
+        
+        results = {}
+        # Now use self.reference_full and separate into layers for detailed analysis
+        for layer in range(self.num_layers):
+            # Layer-specific analysis here
+            layer_results = self._analyze_layer(target_transformed, layer)
+            results[f'layer_{layer}'] = layer_results
+            
+        return results
+        
+    def _analyze_layer(self, target_pcd: o3d.geometry.PointCloud, layer: int):
+        """Analyze specific layer"""
+        # Layer-specific analysis implementation
+        # This will use self.reference_full and extract relevant points
+        # based on layer information
+        return {
+            'mean_distance': 0.0,  # Placeholder
+            'max_deviation': 0.0,  # Placeholder
+            'coverage': 0.0        # Placeholder
+        }
+
     def apply_layer_weights(self, points: np.ndarray, layers: np.ndarray) -> np.ndarray:
         """Safe layer weight application"""
         valid_layers = [i for i in np.unique(layers) if i in self.layer_weights]
