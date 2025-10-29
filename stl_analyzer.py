@@ -125,7 +125,19 @@ if st.button("🚀 Start Analysis", type="primary"):
     if not test_files:
         st.error("Please upload at least one test STL file!")
         st.stop()
-        
+
+    if not validate_file_name(reference_file.name):
+        st.error("Reference file name is invalid. Please upload an `.stl` file with standard characters.")
+        st.stop()
+
+    invalid_tests = [
+        test_file.name for test_file in test_files
+        if not validate_file_name(test_file.name)
+    ]
+    if invalid_tests:
+        st.error(f"Invalid test file name(s): {', '.join(invalid_tests)}. Please rename to alphanumeric/underscore/dash and `.stl` extension.")
+        st.stop()
+
     try:
         analyzer = st.session_state['analyzer']
         progress_bar = st.progress(0)
@@ -221,6 +233,19 @@ if st.button("🚀 Start Analysis", type="primary"):
                                 title=f"Deviation Distribution: {test_file.name}"
                             )
                             st.plotly_chart(fig_hist, use_container_width=True)
+
+                        st.subheader("Normal Alignment")
+                        normal_angles = np.asarray(metrics['normal_angles'])
+                        if normal_angles.size:
+                            fig_normals = plot_normal_angle_distribution(
+                                aligned_points,
+                                normal_angles,
+                                point_size,
+                                color_scale
+                            )
+                            st.plotly_chart(fig_normals, use_container_width=True)
+                        else:
+                            st.info("Normal vectors unavailable for visualization.")
 
                         # Export options
                         export_data = pd.DataFrame(

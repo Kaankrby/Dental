@@ -141,7 +141,8 @@ class STLAnalyzer:
         )
 
         # Transform test point cloud
-        test_aligned = test_pcd.transform(icp_result.transformation)
+        test_aligned = test_pcd.clone()
+        test_aligned.transform(icp_result.transformation)
 
         # Filter points if needed
         if ignore_outside_bbox:
@@ -152,7 +153,12 @@ class STLAnalyzer:
 
         # Compute metrics
         from utils import compute_advanced_metrics
-        metrics = compute_advanced_metrics(test_aligned, self.reference_pcd)
+        metrics = compute_advanced_metrics(
+            test_aligned,
+            self.reference_pcd,
+            source_mesh=test_data.get('mesh'),
+            target_mesh=self.reference_mesh
+        )
         metrics.update({
             'fitness': icp_result.fitness,
             'inlier_rmse': icp_result.inlier_rmse,
