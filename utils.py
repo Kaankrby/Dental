@@ -10,6 +10,7 @@ import streamlit as st
 import time
 import re
 import os
+import rhino3dm as rh
 from typing import Tuple, List, Dict, Any
 from functools import wraps
 import tempfile
