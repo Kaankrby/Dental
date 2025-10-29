@@ -318,6 +318,63 @@ class RhinoAnalyzer:
         lw = self._nearest_layer_weights(points)
         return distances * lw
 
+    def _nearest_layers(self, points: np.ndarray) -> np.ndarray:
+        """Return nearest reference layer name for each point."""
+        if self._ref_kdtree is None or self._ref_point_layers is None or len(points) == 0:
+            return np.array([], dtype=object)
+        layers = np.empty(len(points), dtype=object)
+        for i, p in enumerate(points):
+            _, idx, _ = self._ref_kdtree.search_knn_vector_3d(p, 1)
+            layers[i] = self._ref_point_layers[idx[0]]
+        return layers
+
+    def _filter_reference_for_alignment(self) -> o3d.geometry.PointCloud:
+        """Reference subset for alignment: exclude NOTIMPORTANT and zero-weight layers."""
+        pts = np.asarray(self.reference_pcd.points)
+        if self._ref_point_layers is None or len(pts) == 0:
+            return self.reference_pcd
+        mask = []
+        for ln in self._ref_point_layers:
+            w = float(self.layer_weights.get(ln, 1.0))
+            mask.append((ln.lower() != 'notimportant') and (w > 0))
+        mask = np.array(mask, dtype=bool)
+        if not np.any(mask):
+            return self.reference_pcd
+        out = o3d.geometry.PointCloud()
+        out.points = o3d.utility.Vector3dVector(pts[mask])
+        if len(out.points) > 3:
+            out.estimate_normals()
+        return out
+
+    def _filter_target_for_alignment(self, target_pcd: o3d.geometry.PointCloud) -> o3d.geometry.PointCloud:
+        """Target subset for alignment using nearest-layer classification and weight-prioritized sampling."""
+        pts = np.asarray(target_pcd.points)
+        if len(pts) == 0:
+            return target_pcd
+        nearest_layers = self._nearest_layers(pts)
+        if len(nearest_layers) == 0:
+            return target_pcd
+        weights = np.array([float(self.layer_weights.get(ln, 1.0)) for ln in nearest_layers])
+        keep_mask = (np.char.lower(nearest_layers.astype(str)) != 'notimportant') & (weights > 0)
+        pts_kept = pts[keep_mask]
+        w_kept = weights[keep_mask]
+        if len(pts_kept) == 0:
+            return target_pcd
+        maxw = np.max(w_kept)
+        if maxw <= 0:
+            maxw = 1.0
+        probs = np.clip(w_kept / maxw, 0.0, 1.0)
+        rng = np.random.default_rng()
+        subsample_mask = rng.random(len(pts_kept)) < probs
+        pts_final = pts_kept[subsample_mask]
+        if len(pts_final) < 10:
+            pts_final = pts_kept
+        out = o3d.geometry.PointCloud()
+        out.points = o3d.utility.Vector3dVector(pts_final)
+        if len(out.points) > 3:
+            out.estimate_normals()
+        return out
+
     @performance_monitor
     def add_test_file(self, file_path: str, num_points: int, nb_neighbors: int, std_ratio: float):
         """For API compatibility. No internal storage needed for multi-file pipeline."""
@@ -341,14 +398,18 @@ class RhinoAnalyzer:
         # Load target
         test_pcd = self.load_target(file_path, estimate_normals=True)
 
+        # Build filtered clouds for alignment (exclude NOTIMPORTANT and zero-weight)
+        ref_for_align = self._filter_reference_for_alignment()
+        tgt_for_align = self._filter_target_for_alignment(test_pcd)
+
         # Initial alignment
         transform_init = np.eye(4)
         if use_global_reg:
             # Reuse STLAnalyzer's pipeline for feature-based init
             # Downsample + FPFH
-            source_down = test_pcd.voxel_down_sample(voxel_size=max(voxel_size, 1e-3))
+            source_down = tgt_for_align.voxel_down_sample(voxel_size=max(voxel_size, 1e-3))
             source_down.estimate_normals()
-            target_down = self.reference_pcd.voxel_down_sample(voxel_size=max(voxel_size, 1e-3))
+            target_down = ref_for_align.voxel_down_sample(voxel_size=max(voxel_size, 1e-3))
             target_down.estimate_normals()
             source_fpfh = o3d.pipelines.registration.compute_fpfh_feature(
                 source_down,
@@ -378,8 +439,8 @@ class RhinoAnalyzer:
         estimation = o3d.pipelines.registration.TransformationEstimationPointToPlane()
         try:
             icp_result = o3d.pipelines.registration.registration_icp(
-                test_pcd,
-                self.reference_pcd,
+                tgt_for_align,
+                ref_for_align,
                 icp_threshold,
                 transform_init,
                 estimation,
@@ -388,8 +449,8 @@ class RhinoAnalyzer:
         except Exception:
             # Fallback to point-to-point if normals unavailable
             icp_result = o3d.pipelines.registration.registration_icp(
-                test_pcd,
-                self.reference_pcd,
+                tgt_for_align,
+                ref_for_align,
                 icp_threshold,
                 transform_init,
                 o3d.pipelines.registration.TransformationEstimationPointToPoint(),
@@ -407,7 +468,17 @@ class RhinoAnalyzer:
 
         # Compute advanced metrics (raw)
         from utils import compute_advanced_metrics
-        metrics = compute_advanced_metrics(test_aligned, self.reference_pcd)
+        # Exclude NOTIMPORTANT from evaluation
+        aligned_pts = np.asarray(test_aligned.points)
+        nearest_layers = self._nearest_layers(aligned_pts) if len(aligned_pts) else np.array([], dtype=object)
+        if len(nearest_layers):
+            eval_mask = (np.char.lower(nearest_layers.astype(str)) != 'notimportant') & (
+                np.array([float(self.layer_weights.get(ln, 1.0)) for ln in nearest_layers]) > 0
+            )
+            eval_pcd = test_aligned.select_by_index(np.nonzero(eval_mask)[0])
+        else:
+            eval_pcd = test_aligned
+        metrics = compute_advanced_metrics(eval_pcd, self.reference_pcd)
         metrics.update({
             'fitness': icp_result.fitness,
             'inlier_rmse': icp_result.inlier_rmse,
@@ -415,7 +486,7 @@ class RhinoAnalyzer:
         })
 
         # Compute layer-weighted deviations
-        aligned_points = np.asarray(test_aligned.points)
+        aligned_points = np.asarray(eval_pcd.points)
         raw_dists = metrics['distances']
         weighted_dists = self.apply_layer_weights(raw_dists, aligned_points)
         metrics['mean_weighted_deviation'] = float(np.mean(weighted_dists))
