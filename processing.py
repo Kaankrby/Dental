@@ -454,12 +454,13 @@ class RhinoAnalyzer:
             eval_pcd = test_aligned.select_by_index(np.nonzero(eval_mask)[0])
         else:
             eval_pcd = test_aligned
-            metrics = compute_advanced_metrics(eval_pcd, self.reference_pcd)
-            metrics.update({
-                'fitness': icp_result.fitness,
-                'inlier_rmse': icp_result.inlier_rmse,
-                'transformation': icp_result.transformation
-            })
+
+        metrics = compute_advanced_metrics(eval_pcd, self.reference_pcd)
+        metrics.update({
+            'fitness': icp_result.fitness,
+            'inlier_rmse': icp_result.inlier_rmse,
+            'transformation': icp_result.transformation
+        })
 
         # Compute layer-weighted deviations
         aligned_points = np.asarray(eval_pcd.points)
@@ -467,25 +468,25 @@ class RhinoAnalyzer:
         weighted_dists = self.apply_layer_weights(raw_dists, aligned_points)
         metrics['mean_weighted_deviation'] = float(np.mean(weighted_dists))
         metrics['max_weighted_deviation'] = float(np.max(weighted_dists))
-            metrics['weighted_distances'] = weighted_dists
+        metrics['weighted_distances'] = weighted_dists
 
-            # Voxel-based volumetric overlap (approximate, works for open meshes)
-            try:
-                from utils import compute_voxel_overlap_metrics
-                vox = compute_voxel_overlap_metrics(eval_pcd, self.reference_pcd, volume_voxel_size)
-                metrics.update({
-                    'volume_intersection_vox': vox.get('volume_intersection', 0.0),
-                    'volume_union_vox': vox.get('volume_union', 0.0),
-                    'volume_ref_vox': vox.get('volume_ref_approx', 0.0),
-                    'volume_test_vox': vox.get('volume_test_approx', 0.0),
-                    'volume_overlap_jaccard': vox.get('volume_overlap_jaccard', 0.0),
-                    'coverage_ref_pct': vox.get('coverage_ref_pct', 0.0),
-                    'coverage_test_pct': vox.get('coverage_test_pct', 0.0),
-                })
-                # Backwards-compatible override for similarity using Jaccard
-                metrics['volume_similarity'] = float(metrics.get('volume_overlap_jaccard', 0.0))
-            except Exception:
-                pass
+        # Voxel-based volumetric overlap (approximate, works for open meshes)
+        try:
+            from utils import compute_voxel_overlap_metrics
+            vox = compute_voxel_overlap_metrics(eval_pcd, self.reference_pcd, volume_voxel_size)
+            metrics.update({
+                'volume_intersection_vox': vox.get('volume_intersection', 0.0),
+                'volume_union_vox': vox.get('volume_union', 0.0),
+                'volume_ref_vox': vox.get('volume_ref_approx', 0.0),
+                'volume_test_vox': vox.get('volume_test_approx', 0.0),
+                'volume_overlap_jaccard': vox.get('volume_overlap_jaccard', 0.0),
+                'coverage_ref_pct': vox.get('coverage_ref_pct', 0.0),
+                'coverage_test_pct': vox.get('coverage_test_pct', 0.0),
+            })
+            # Backwards-compatible override for similarity using Jaccard
+            metrics['volume_similarity'] = float(metrics.get('volume_overlap_jaccard', 0.0))
+        except Exception:
+            pass
 
         return {
             'metrics': metrics,
