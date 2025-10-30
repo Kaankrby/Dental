@@ -395,7 +395,7 @@ class RhinoAnalyzer:
         if use_global_reg:
             # Reuse STLAnalyzer's pipeline for feature-based init
             # Downsample + FPFH
-            source_down = test_pcd.voxel_down_sample(voxel_size=max(voxel_size, 1e-3))
+                source_down = self.target_pcd.voxel_down_sample(voxel_size=max(voxel_size, 1e-3))
             source_down.estimate_normals()
             ref_for_global = self.reference_pcd if use_full_ref_global else ref_for_align
             target_down = ref_for_global.voxel_down_sample(voxel_size=max(voxel_size, 1e-3))
@@ -425,15 +425,15 @@ class RhinoAnalyzer:
 
         # ICP refinement
         # Choose estimation based on icp_mode
-        def _run_icp(estimation):
-            return o3d.pipelines.registration.registration_icp(
-                test_pcd,
-                ref_for_align,
-                icp_threshold,
-                transform_init,
-                estimation,
-                o3d.pipelines.registration.ICPConvergenceCriteria(max_iteration=max_iter)
-            )
+            def _run_icp(estimation):
+                return o3d.pipelines.registration.registration_icp(
+                    self.target_pcd,
+                    ref_for_align,
+                    icp_threshold,
+                    transform_init,
+                    estimation,
+                    o3d.pipelines.registration.ICPConvergenceCriteria(max_iteration=max_iter)
+                )
 
         if icp_mode == 'point_to_point':
             icp_result = _run_icp(o3d.pipelines.registration.TransformationEstimationPointToPoint())
@@ -446,7 +446,7 @@ class RhinoAnalyzer:
                 icp_result = _run_icp(o3d.pipelines.registration.TransformationEstimationPointToPoint())
 
         # Transform test point cloud
-        test_aligned = copy.deepcopy(test_pcd)
+        test_aligned = copy.deepcopy(self.target_pcd)
         test_aligned.transform(icp_result.transformation)
 
         # Filter by bounding box if requested
