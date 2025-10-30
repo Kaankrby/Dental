@@ -19,7 +19,14 @@ from visualization import (
     plot_registration_result,
     plot_rhino_model,
 )
-from utils import save_uploaded_file, validate_3dm_file, validate_stl_file, rhino_unit_name, estimate_point_spacing
+from utils import (
+    save_uploaded_file,
+    validate_3dm_file,
+    validate_stl_file,
+    rhino_unit_name,
+    estimate_point_spacing,
+    default_layer_weight,
+)
 from streamlit.runtime.scriptrunner import get_script_run_ctx
 
 # -------------------------------------------------
@@ -254,7 +261,7 @@ if ref_file:
         current = st.session_state.get("layer_weights", {})
         for layer in model_preview.Layers:
             if layer.Name not in current:
-                current[layer.Name] = 1.0
+                current[layer.Name] = default_layer_weight(layer.Name)
         st.session_state.layer_weights = current
         st.session_state['analyzer'].layer_weights = current
         # Trigger a rerun once on new upload so sidebar reflects weights immediately
@@ -298,7 +305,7 @@ def _populate_layer_weights_from_3dm(uploaded_ref_file):
             current = st.session_state.get("layer_weights", {})
             for ln in layer_names:
                 if ln not in current:
-                    current[ln] = 1.0
+                    current[ln] = default_layer_weight(ln)
             st.session_state.layer_weights = current
             st.session_state['analyzer'].layer_weights = current
     except Exception:
@@ -396,7 +403,7 @@ if st.button("Start Analysis", type="primary", key="start_analysis_v2"):
                             st.metric("Max Weighted", f"{metrics['max_weighted_deviation']:.3f} mm")
                             if 'volume_intersection_vox' in metrics:
                                 st.metric("Overlap (Jaccard)", f"{metrics['volume_overlap_jaccard']*100:.1f}%")
-                                st.metric("Intersect Volume", f"{metrics['volume_intersection_vox']:.0f} mm³")
+                                st.metric("Intersect Volume", f"{metrics['volume_intersection_vox']:.3f} mm³")
                                 st.metric("Overlap vs Ref", f"{metrics['coverage_ref_pct']:.1f}%")
                                 st.metric("Overlap vs Test", f"{metrics['coverage_test_pct']:.1f}%")
                             else:

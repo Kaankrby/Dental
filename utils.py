@@ -114,6 +114,29 @@ def estimate_point_spacing(
         return 1.0
     return float(np.mean(dists))
 
+def default_layer_weight(layer_name: str) -> float:
+    """Return default weight for a given layer name.
+
+    Rules:
+    - NOTIMPORTANT -> 0
+    - Numeric names (supports comma decimal like "0,5") -> that value
+    - "Default" or anything else -> 1
+    """
+    if not layer_name:
+        return 1.0
+    name = str(layer_name).strip()
+    low = name.lower()
+    if low == 'notimportant':
+        return 0.0
+    if low == 'default':
+        return 1.0
+    # Try parse numeric from name (supports comma decimal)
+    try:
+        as_num = float(name.replace(',', '.'))
+        return float(as_num)
+    except Exception:
+        return 1.0
+
 def compute_advanced_metrics(
     source_aligned: o3d.geometry.PointCloud,
     target: o3d.geometry.PointCloud

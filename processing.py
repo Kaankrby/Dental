@@ -221,7 +221,11 @@ class RhinoAnalyzer:
 
             # Ensure a default weight exists
             if layer.Name not in self.layer_weights:
-                self.layer_weights[layer.Name] = 1.0
+                try:
+                    from utils import default_layer_weight
+                    self.layer_weights[layer.Name] = default_layer_weight(layer.Name)
+                except Exception:
+                    self.layer_weights[layer.Name] = 1.0
 
         if not all_points:
             raise ValueError("No mesh vertices found in .3dm reference")
