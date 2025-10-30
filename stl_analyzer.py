@@ -123,6 +123,13 @@ with st.sidebar:
         value=0.2 if processing_mode == "Balanced" else 0.1 if processing_mode == "Precision" else 0.3,
         help="Threshold used to compute coverage within tolerance",
     )
+    volume_voxel = st.slider(
+        "Volume Voxel Size (mm)",
+        0.05,
+        2.0,
+        value=0.5 if processing_mode == "Balanced" else 0.25 if processing_mode == "Precision" else 1.0,
+        help="Voxel size for approximate volume overlap on open meshes",
+    )
 
     # Metrics inclusion toggle for NOTIMPORTANT
     include_notimportant_metrics = st.checkbox(
@@ -304,6 +311,7 @@ if st.button("Start Analysis", type="primary", key="start_analysis_v2"):
                         include_notimportant_metrics,
                         use_full_ref_global,
                         icp_mode,
+                        volume_voxel,
                     )
                     metrics = result["metrics"]
 
@@ -315,7 +323,13 @@ if st.button("Start Analysis", type="primary", key="start_analysis_v2"):
                             st.metric("Max Deviation", f"{metrics['max_deviation']:.3f} mm")
                             st.metric("Mean Weighted", f"{metrics['mean_weighted_deviation']:.3f} mm")
                             st.metric("Max Weighted", f"{metrics['max_weighted_deviation']:.3f} mm")
-                            st.metric("Volume Similarity", f"{metrics['volume_similarity']*100:.1f}%")
+                            if 'volume_intersection_vox' in metrics:
+                                st.metric("Overlap (Jaccard)", f"{metrics['volume_overlap_jaccard']*100:.1f}%")
+                                st.metric("Intersect Volume", f"{metrics['volume_intersection_vox']:.0f} mm³")
+                                st.metric("Overlap vs Ref", f"{metrics['coverage_ref_pct']:.1f}%")
+                                st.metric("Overlap vs Test", f"{metrics['coverage_test_pct']:.1f}%")
+                            else:
+                                st.metric("Volume Similarity", f"{metrics['volume_similarity']*100:.1f}%")
 
                         with c2:
                             dist = np.asarray(metrics["distances"]) 

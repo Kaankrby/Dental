@@ -141,6 +141,69 @@ def compute_advanced_metrics(
         'normal_angles': np.rad2deg(normal_angles)  # Convert to degrees for visualization
     }
 
+@performance_monitor
+def compute_voxel_overlap_metrics(
+    source: o3d.geometry.PointCloud,
+    target: o3d.geometry.PointCloud,
+    voxel_size: float
+) -> Dict[str, Any]:
+    """Approximate volumetric overlap via voxelization for open meshes.
+
+    Returns approximate volumes (mm^3) and overlap ratios.
+    """
+    if voxel_size <= 0:
+        raise ValueError("voxel_size must be positive")
+
+    src_pts = np.asarray(source.points)
+    tgt_pts = np.asarray(target.points)
+    if len(src_pts) == 0 or len(tgt_pts) == 0:
+        return {
+            'volume_ref_approx': 0.0,
+            'volume_test_approx': 0.0,
+            'volume_intersection': 0.0,
+            'volume_union': 0.0,
+            'volume_overlap_jaccard': 0.0,
+            'coverage_ref_pct': 0.0,
+            'coverage_test_pct': 0.0,
+        }
+
+    # Align voxel grid origins using global min bound so indices line up
+    min_bound = np.minimum(src_pts.min(axis=0), tgt_pts.min(axis=0))
+
+    src_shift = o3d.geometry.PointCloud(source)
+    src_shift.translate(-min_bound)
+    tgt_shift = o3d.geometry.PointCloud(target)
+    tgt_shift.translate(-min_bound)
+
+    vg_src = o3d.geometry.VoxelGrid.create_from_point_cloud(src_shift, voxel_size)
+    vg_tgt = o3d.geometry.VoxelGrid.create_from_point_cloud(tgt_shift, voxel_size)
+
+    vox_src = {tuple(v.grid_index) for v in vg_src.get_voxels()}
+    vox_tgt = {tuple(v.grid_index) for v in vg_tgt.get_voxels()}
+
+    inter = vox_src & vox_tgt
+    union = vox_src | vox_tgt
+
+    v_unit = voxel_size ** 3
+    vol_src = len(vox_src) * v_unit
+    vol_tgt = len(vox_tgt) * v_unit
+    vol_inter = len(inter) * v_unit
+    vol_union = len(union) * v_unit
+
+    jacc = (len(inter) / len(union)) if len(union) else 0.0
+    cov_src = (len(inter) / len(vox_src) * 100.0) if len(vox_src) else 0.0
+    cov_tgt = (len(inter) / len(vox_tgt) * 100.0) if len(vox_tgt) else 0.0
+
+    return {
+        'volume_ref_approx': float(vol_tgt),
+        'volume_test_approx': float(vol_src),
+        'volume_intersection': float(vol_inter),
+        'volume_union': float(vol_union),
+        'volume_overlap_jaccard': float(jacc),
+        'coverage_ref_pct': float(cov_tgt),
+        'coverage_test_pct': float(cov_src),
+    }
+
 def validate_file_name(filename: str) -> bool:
     """Validate filename."""
     pattern = r'^[\w\-. ]+\.stl$'
