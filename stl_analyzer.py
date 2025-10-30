@@ -19,7 +19,7 @@ from visualization import (
     plot_registration_result,
     plot_rhino_model,
 )
-from utils import save_uploaded_file, validate_3dm_file, validate_stl_file
+from utils import save_uploaded_file, validate_3dm_file, validate_stl_file, rhino_unit_name
 from streamlit.runtime.scriptrunner import get_script_run_ctx
 
 # -------------------------------------------------
@@ -123,6 +123,30 @@ with st.sidebar:
         value=0.2 if processing_mode == "Balanced" else 0.1 if processing_mode == "Precision" else 0.3,
         help="Threshold used to compute coverage within tolerance",
     )
+    
+    # Units
+    st.subheader("Units")
+    stl_units_label = st.selectbox(
+        "Test STL Units",
+        [
+            "Millimeters (mm)",
+            "Centimeters (cm)",
+            "Meters (m)",
+            "Inches (in)",
+            "Feet (ft)",
+            "Microns (µm)",
+        ],
+        help="STL is unitless; choose how to interpret and convert to mm",
+    )
+    stl_unit_scale_map = {
+        "Millimeters (mm)": 1.0,
+        "Centimeters (cm)": 10.0,
+        "Meters (m)": 1000.0,
+        "Inches (in)": 25.4,
+        "Feet (ft)": 304.8,
+        "Microns (µm)": 0.001,
+    }
+    stl_scale_to_mm = float(stl_unit_scale_map.get(stl_units_label, 1.0))
     volume_voxel = st.slider(
         "Volume Voxel Size (mm)",
         0.05,
@@ -194,6 +218,11 @@ if ref_file:
     # Save and load temporary file
     ref_path_preview = save_uploaded_file(ref_file)
     model_preview = rh.File3dm.Read(ref_path_preview)
+    try:
+        units_name = rhino_unit_name(model_preview.Settings.ModelUnitSystem)
+        st.info(f"Reference units: {units_name} (converted to mm for analysis)")
+    except Exception:
+        st.info("Reference units: Millimeters (assumed)")
 
     # Layer overview
     with st.expander("Layer Summary"):
@@ -303,6 +332,7 @@ if st.button("Start Analysis", type="primary", key="start_analysis_v2"):
         
                     result = analyzer.process_test_file(
                         test_path,
+                        stl_scale_to_mm,
                         use_global_registration,
                         voxel_size_global,
                         icp_threshold,

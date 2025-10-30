@@ -141,6 +141,42 @@ def compute_advanced_metrics(
         'normal_angles': np.rad2deg(normal_angles)  # Convert to degrees for visualization
     }
 
+def rhino_unit_scale_to_mm(unit) -> float:
+    """Return scale to convert from given Rhino unit system to millimeters."""
+    try:
+        mapping = {
+            rh.UnitSystem.Microns: 0.001,
+            rh.UnitSystem.Millimeters: 1.0,
+            rh.UnitSystem.Centimeters: 10.0,
+            rh.UnitSystem.Meters: 1000.0,
+            rh.UnitSystem.Kilometers: 1_000_000.0,
+            rh.UnitSystem.Inches: 25.4,
+            rh.UnitSystem.Feet: 304.8,
+            rh.UnitSystem.Yards: 914.4,
+            rh.UnitSystem.Miles: 1_609_344.0,
+        }
+        return float(mapping.get(unit, 1.0))
+    except Exception:
+        return 1.0
+
+def rhino_unit_name(unit) -> str:
+    """Human friendly name for Rhino unit system."""
+    try:
+        names = {
+            rh.UnitSystem.Microns: "Microns",
+            rh.UnitSystem.Millimeters: "Millimeters",
+            rh.UnitSystem.Centimeters: "Centimeters",
+            rh.UnitSystem.Meters: "Meters",
+            rh.UnitSystem.Kilometers: "Kilometers",
+            rh.UnitSystem.Inches: "Inches",
+            rh.UnitSystem.Feet: "Feet",
+            rh.UnitSystem.Yards: "Yards",
+            rh.UnitSystem.Miles: "Miles",
+        }
+        return names.get(unit, "Millimeters")
+    except Exception:
+        return "Millimeters"
+
 @performance_monitor
 def compute_voxel_overlap_metrics(
     source: o3d.geometry.PointCloud,

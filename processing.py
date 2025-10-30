@@ -238,6 +238,15 @@ class RhinoAnalyzer:
             sampled_points = all_points
             sampled_layers = all_layer_names
 
+        # Scale reference points to millimeters according to model units
+        try:
+            from utils import rhino_unit_scale_to_mm
+            scale_to_mm = rhino_unit_scale_to_mm(model.Settings.ModelUnitSystem)
+        except Exception:
+            scale_to_mm = 1.0
+        if scale_to_mm != 1.0:
+            sampled_points = sampled_points * float(scale_to_mm)
+
         self.reference_pcd = o3d.geometry.PointCloud()
         self.reference_pcd.points = o3d.utility.Vector3dVector(sampled_points)
         # Estimate normals for metric computations
@@ -254,10 +263,12 @@ class RhinoAnalyzer:
         return self.reference_pcd
 
     @performance_monitor
-    def load_target(self, file_path: str, estimate_normals: bool = True):
+    def load_target(self, file_path: str, estimate_normals: bool = True, stl_scale_to_mm: float = 1.0):
         """Load target STL/mesh into point cloud."""
         target_pcd = load_mesh(file_path)
-        points = np.asarray(target_pcd.points)
+        points = np.asarray(target_pcd.points, dtype=np.float64)
+        if stl_scale_to_mm and stl_scale_to_mm != 1.0 and len(points):
+            points = points * float(stl_scale_to_mm)
 
         self.target_pcd = o3d.geometry.PointCloud()
         self.target_pcd.points = o3d.utility.Vector3dVector(points)
@@ -355,9 +366,10 @@ class RhinoAnalyzer:
         return True
 
     @performance_monitor
-    def process_test_file(
+        def process_test_file(
             self,
             file_path: str,
+            stl_scale_to_mm: float,
             use_global_reg: bool,
             voxel_size: float,
             icp_threshold: float,
@@ -373,7 +385,7 @@ class RhinoAnalyzer:
             raise ValueError("Reference not loaded")
 
         # Load target
-        test_pcd = self.load_target(file_path, estimate_normals=True)
+            test_pcd = self.load_target(file_path, estimate_normals=True, stl_scale_to_mm=stl_scale_to_mm)
 
         # Build filtered reference for alignment; keep full target for robustness
         ref_for_align = self._filter_reference_for_alignment()
