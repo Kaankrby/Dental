@@ -470,7 +470,8 @@ class RhinoAnalyzer:
 
         return {
             'metrics': metrics,
-            'aligned_pcd': test_aligned
+            'aligned_pcd': test_aligned,
+            'eval_pcd': eval_pcd,
         }
 
     def calculate_weighted_deviation(self, test_points: np.ndarray) -> dict:

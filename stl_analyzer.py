@@ -308,9 +308,10 @@ if st.button("Start Analysis", type="primary", key="start_analysis_v2"):
                         )
                         st.plotly_chart(overlay, use_container_width=True)
 
-                        aligned_points = np.asarray(result["aligned_pcd"].points)
+                        # Use the exact points used to compute metrics to avoid length mismatch
+                        eval_points = np.asarray(result.get("eval_pcd", result["aligned_pcd"]).points)
                         export_df = pd.DataFrame(
-                            np.column_stack((aligned_points, dist, wdist)),
+                            np.column_stack((eval_points, dist, wdist)),
                             columns=["X", "Y", "Z", "Deviation", "WeightedDeviation"],
                         )
                         st.download_button(
