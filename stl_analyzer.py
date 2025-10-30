@@ -116,6 +116,13 @@ with st.sidebar:
     st.subheader("Visualization")
     point_size = st.slider("Point Size", 1, 10, 3)
     color_scale = st.selectbox("Color Scale", ["viridis", "plasma", "turbo", "hot"])
+    deviation_tolerance = st.slider(
+        "Deviation Tolerance (mm)",
+        0.01,
+        2.0,
+        value=0.2 if processing_mode == "Balanced" else 0.1 if processing_mode == "Precision" else 0.3,
+        help="Threshold used to compute coverage within tolerance",
+    )
 
     # Metrics inclusion toggle for NOTIMPORTANT
     include_notimportant_metrics = st.checkbox(
@@ -318,6 +325,44 @@ if st.button("Start Analysis", type="primary", key="start_analysis_v2"):
                             st.plotly_chart(fig1, use_container_width=True)
                             st.plotly_chart(fig2, use_container_width=True)
 
+                        # Deviation analysis
+                        st.subheader("Deviation Analysis")
+                        eval_points = np.asarray(result.get("eval_pcd", result["aligned_pcd"]).points)
+                        # Stats
+                        rms = float(np.sqrt(np.mean(dist**2))) if len(dist) else 0.0
+                        rms_w = float(np.sqrt(np.mean(wdist**2))) if len(wdist) else 0.0
+                        p95 = float(np.percentile(dist, 95)) if len(dist) else 0.0
+                        p95_w = float(np.percentile(wdist, 95)) if len(wdist) else 0.0
+                        within = float(np.mean(dist <= deviation_tolerance) * 100.0) if len(dist) else 0.0
+                        within_w = float(np.mean(wdist <= deviation_tolerance) * 100.0) if len(wdist) else 0.0
+
+                        c3, c4, c5 = st.columns(3)
+                        with c3:
+                            st.metric("RMS Deviation", f"{rms:.3f} mm")
+                            st.metric("RMS Weighted", f"{rms_w:.3f} mm")
+                        with c4:
+                            st.metric("P95 Deviation", f"{p95:.3f} mm")
+                            st.metric("P95 Weighted", f"{p95_w:.3f} mm")
+                        with c5:
+                            st.metric(f"Within {deviation_tolerance:.2f} mm", f"{within:.1f}%")
+                            st.metric(f"Within {deviation_tolerance:.2f} mm (Weighted)", f"{within_w:.1f}%")
+
+                        # 3D heatmaps of deviations
+                        try:
+                            from visualization import plot_point_cloud_by_values
+                            heat1 = plot_point_cloud_by_values(
+                                eval_points, dist, title="3D Heatmap: Raw Deviations",
+                                point_size=point_size, color_scale=color_scale, colorbar_title="Deviation (mm)"
+                            )
+                            heat2 = plot_point_cloud_by_values(
+                                eval_points, wdist, title="3D Heatmap: Weighted Deviations",
+                                point_size=point_size, color_scale=color_scale, colorbar_title="Weighted (mm)"
+                            )
+                            st.plotly_chart(heat1, use_container_width=True)
+                            st.plotly_chart(heat2, use_container_width=True)
+                        except Exception as _e:
+                            st.warning("Unable to render 3D deviation heatmaps.")
+
                         overlay = plot_multiple_point_clouds(
                             [result["aligned_pcd"], analyzer.reference_pcd],
                             ["Aligned Test", "Reference"],
@@ -325,7 +370,7 @@ if st.button("Start Analysis", type="primary", key="start_analysis_v2"):
                         st.plotly_chart(overlay, use_container_width=True)
 
                         # Use the exact points used to compute metrics to avoid length mismatch
-                        eval_points = np.asarray(result.get("eval_pcd", result["aligned_pcd"]).points)
+                        # (already computed above as eval_points)
                         export_df = pd.DataFrame(
                             np.column_stack((eval_points, dist, wdist)),
                             columns=["X", "Y", "Z", "Deviation", "WeightedDeviation"],

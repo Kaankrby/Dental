@@ -9,6 +9,54 @@ import plotly.express as px
 import open3d as o3d
 import copy
 
+def plot_point_cloud_by_values(
+    points: np.ndarray,
+    values: np.ndarray,
+    title: str,
+    point_size: int = 3,
+    color_scale: str = "viridis",
+    colorbar_title: str = "Value"
+) -> go.Figure:
+    """Scatter 3D of points colored by per-point values (e.g., deviations)."""
+    if points is None or len(points) == 0:
+        return go.Figure()
+    pts = np.asarray(points)
+    vals = np.asarray(values)
+    if len(pts) != len(vals):
+        # Fallback: trim to shortest
+        n = min(len(pts), len(vals))
+        pts = pts[:n]
+        vals = vals[:n]
+    fig = go.Figure(data=[
+        go.Scatter3d(
+            x=pts[:, 0],
+            y=pts[:, 1],
+            z=pts[:, 2],
+            mode='markers',
+            marker=dict(
+                size=point_size,
+                color=vals,
+                colorscale=color_scale,
+                showscale=True,
+                colorbar=dict(title=colorbar_title),
+                opacity=0.85,
+            ),
+            hovertemplate=(
+                "X: %{x:.2f} mm<br>"
+                "Y: %{y:.2f} mm<br>"
+                "Z: %{z:.2f} mm<br>"
+                f"{colorbar_title}: %{{marker.color:.3f}}<extra></extra>"
+            )
+        )
+    ])
+    fig.update_layout(
+        title=dict(text=title, x=0.5, xanchor='center'),
+        scene=dict(aspectmode='data'),
+        margin=dict(l=0, r=0, b=0, t=40),
+        height=600,
+    )
+    return fig
+
 def plot_point_cloud_heatmap(pcd: o3d.geometry.PointCloud) -> go.Figure:
     """Create a heatmap visualization of point cloud"""
     points = np.asarray(pcd.points)
