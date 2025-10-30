@@ -88,6 +88,32 @@ def load_ascii_stl(path: str) -> o3d.geometry.PointCloud:
     pcd.points = o3d.utility.Vector3dVector(np.unique(vertices, axis=0))
     return pcd
 
+def estimate_point_spacing(
+    pcd: o3d.geometry.PointCloud,
+    sample_size: int = 2000,
+    k: int = 2
+) -> float:
+    """Estimate characteristic point spacing (mm) via nearest-neighbor distance.
+
+    Samples up to `sample_size` points and averages distance to the nearest neighbor.
+    """
+    pts = np.asarray(pcd.points)
+    n = len(pts)
+    if n < 2:
+        return 1.0
+    idxs = np.random.choice(n, size=min(sample_size, n), replace=False)
+    tree = o3d.geometry.KDTreeFlann(pcd)
+    dists = []
+    for i in idxs:
+        _, ind, _ = tree.search_knn_vector_3d(pcd.points[i], max(k, 2))
+        if len(ind) >= 2:
+            a = np.asarray(pcd.points[i])
+            b = np.asarray(pcd.points[ind[1]])  # skip self at ind[0]
+            dists.append(np.linalg.norm(a - b))
+    if not dists:
+        return 1.0
+    return float(np.mean(dists))
+
 def compute_advanced_metrics(
     source_aligned: o3d.geometry.PointCloud,
     target: o3d.geometry.PointCloud

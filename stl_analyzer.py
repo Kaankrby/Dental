@@ -19,7 +19,7 @@ from visualization import (
     plot_registration_result,
     plot_rhino_model,
 )
-from utils import save_uploaded_file, validate_3dm_file, validate_stl_file, rhino_unit_name
+from utils import save_uploaded_file, validate_3dm_file, validate_stl_file, rhino_unit_name, estimate_point_spacing
 from streamlit.runtime.scriptrunner import get_script_run_ctx
 
 # -------------------------------------------------
@@ -68,12 +68,18 @@ with st.sidebar:
         help="Use RANSAC-based global registration for initial alignment",
     )
 
+    auto_voxels = st.checkbox(
+        "Auto Voxel Sizes (recommended)",
+        value=True,
+        help="Automatically choose voxel sizes based on reference scale",
+    )
+
     voxel_size_global = st.slider(
         "Global Voxel Size (mm)",
         0.1,
         5.0,
         value=1.5 if processing_mode == "Balanced" else 0.5 if processing_mode == "Precision" else 3.0,
-        disabled=not use_global_registration,
+        disabled=(not use_global_registration) or auto_voxels,
     )
 
     use_full_ref_global = st.checkbox(
@@ -153,6 +159,7 @@ with st.sidebar:
         2.0,
         value=0.5 if processing_mode == "Balanced" else 0.25 if processing_mode == "Precision" else 1.0,
         help="Voxel size for approximate volume overlap on open meshes",
+        disabled=auto_voxels,
     )
 
     # Metrics inclusion toggle for NOTIMPORTANT
@@ -315,11 +322,27 @@ if st.button("Start Analysis", type="primary", key="start_analysis_v2"):
                     _populate_layer_weights_from_3dm(ref_file)
 
                 # Load reference with requested sampling
-                analyzer.load_reference_3dm(
+                reference_pcd = analyzer.load_reference_3dm(
                     ref_path,
                     st.session_state.get("layer_weights", {}),
                     max_points=num_points,
                 )
+                # Auto-guess voxel sizes from reference spacing
+                if auto_voxels:
+                    try:
+                        spacing = estimate_point_spacing(reference_pcd, sample_size=2000, k=2)
+                    except Exception:
+                        spacing = 0.5
+                    # Heuristics tuned for dental scale (mm)
+                    def _quantize(x, step=0.05):
+                        return round(x / step) * step
+                    def _clamp(x, lo, hi):
+                        return max(lo, min(hi, x))
+                    voxel_size_global_used = _clamp(_quantize(spacing * 3.0), 0.1, 3.0)
+                    volume_voxel_used = _clamp(_quantize(spacing * 2.0), 0.1, 1.5)
+                else:
+                    voxel_size_global_used = voxel_size_global
+                    volume_voxel_used = volume_voxel
 
                 # Process each test file
                 for i, tf in enumerate(test_files, start=1):
@@ -334,14 +357,14 @@ if st.button("Start Analysis", type="primary", key="start_analysis_v2"):
                         test_path,
                         stl_scale_to_mm,
                         use_global_registration,
-                        voxel_size_global,
+                        voxel_size_global_used,
                         icp_threshold,
                         icp_max_iter,
                         True,
                         include_notimportant_metrics,
                         use_full_ref_global,
                         icp_mode,
-                        volume_voxel,
+                        volume_voxel_used,
                     )
                     metrics = result["metrics"]
 
@@ -412,6 +435,12 @@ if st.button("Start Analysis", type="primary", key="start_analysis_v2"):
                             ["Aligned Test", "Reference"],
                         )
                         st.plotly_chart(overlay, width='stretch')
+
+                        # Report auto voxel sizes used
+                        if auto_voxels:
+                            st.caption(
+                                f"Auto voxel sizes: global {voxel_size_global_used:.2f} mm, volume {volume_voxel_used:.2f} mm"
+                            )
 
                         # Use the exact points used to compute metrics to avoid length mismatch
                         # (already computed above as eval_points)
