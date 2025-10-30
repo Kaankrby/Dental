@@ -385,7 +385,7 @@ class RhinoAnalyzer:
             raise ValueError("Reference not loaded")
 
         # Load target
-            test_pcd = self.load_target(file_path, estimate_normals=True, stl_scale_to_mm=stl_scale_to_mm)
+        self.load_target(file_path, estimate_normals=True, stl_scale_to_mm=stl_scale_to_mm)
 
         # Build filtered reference for alignment; keep full target for robustness
         ref_for_align = self._filter_reference_for_alignment()
@@ -395,7 +395,7 @@ class RhinoAnalyzer:
         if use_global_reg:
             # Reuse STLAnalyzer's pipeline for feature-based init
             # Downsample + FPFH
-                source_down = self.target_pcd.voxel_down_sample(voxel_size=max(voxel_size, 1e-3))
+            source_down = self.target_pcd.voxel_down_sample(voxel_size=max(voxel_size, 1e-3))
             source_down.estimate_normals()
             ref_for_global = self.reference_pcd if use_full_ref_global else ref_for_align
             target_down = ref_for_global.voxel_down_sample(voxel_size=max(voxel_size, 1e-3))
