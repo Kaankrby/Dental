@@ -355,7 +355,7 @@ class RhinoAnalyzer:
         return True
 
     @performance_monitor
-        def process_test_file(
+    def process_test_file(
             self,
             file_path: str,
             use_global_reg: bool,
