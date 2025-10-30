@@ -196,6 +196,22 @@ if ref_file:
         )
         st.dataframe(layer_table, use_container_width=True)
 
+    # Initialize/augment layer weights from the uploaded reference so the sidebar updates
+    try:
+        current = st.session_state.get("layer_weights", {})
+        for layer in model_preview.Layers:
+            if layer.Name not in current:
+                current[layer.Name] = 1.0
+        st.session_state.layer_weights = current
+        st.session_state['analyzer'].layer_weights = current
+        # Trigger a rerun once on new upload so sidebar reflects weights immediately
+        last_name = st.session_state.get("_last_ref_name")
+        if last_name != getattr(ref_file, "name", None):
+            st.session_state["_last_ref_name"] = getattr(ref_file, "name", None)
+            st.experimental_rerun()
+    except Exception:
+        pass
+
     # 3D Preview
     with st.expander("3D Preview"):
         col1, col2 = st.columns([3, 1])
