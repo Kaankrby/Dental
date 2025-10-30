@@ -46,8 +46,8 @@ with st.sidebar:
     # Processing modes
     processing_mode = st.radio(
         "Processing Mode",
-        ["Balanced", "Precision", "Speed"],
-        help="Predefined parameter sets for different use cases",
+        ["Balanced", "Precision", "Speed", "Adaptive"],
+        help="Predefined parameter sets. Adaptive auto-tunes ICP threshold from model scale.",
     )
 
     # Point Cloud Generation
@@ -56,7 +56,9 @@ with st.sidebar:
         "Sample Points",
         1000,
         100000,
-        value=15000 if processing_mode == "Balanced" else 30000 if processing_mode == "Precision" else 5000,
+        value=(
+            20000 if processing_mode == "Adaptive" else 15000 if processing_mode == "Balanced" else 30000 if processing_mode == "Precision" else 5000
+        ),
         help="Number of points to sample from the reference .3dm",
     )
 
@@ -93,7 +95,8 @@ with st.sidebar:
         "ICP Threshold (mm)",
         0.01,
         2.0,
-        value=0.3 if processing_mode == "Balanced" else 0.1 if processing_mode == "Precision" else 0.5,
+        value=(0.25 if processing_mode == "Adaptive" else 0.3 if processing_mode == "Balanced" else 0.1 if processing_mode == "Precision" else 0.5),
+        disabled=(processing_mode == "Adaptive"),
     )
 
     icp_max_iter = st.slider(
@@ -344,6 +347,21 @@ if st.button("Start Analysis", type="primary", key="start_analysis_v2"):
                     voxel_size_global_used = voxel_size_global
                     volume_voxel_used = volume_voxel
 
+                # Adaptive ICP threshold from spacing if selected
+                if processing_mode == "Adaptive":
+                    try:
+                        spacing_for_icp = spacing if 'spacing' in locals() else estimate_point_spacing(reference_pcd, sample_size=2000, k=2)
+                    except Exception:
+                        spacing_for_icp = 0.1
+                    def _quantize_icp(x, step=0.01):
+                        return round(x / step) * step
+                    def _clamp_icp(x, lo, hi):
+                        return max(lo, min(hi, x))
+                    # Threshold around few-neighbor spacing; slightly generous
+                    icp_threshold_used = _clamp_icp(_quantize_icp(spacing_for_icp * 3.0), 0.05, 1.5)
+                else:
+                    icp_threshold_used = icp_threshold
+
                 # Process each test file
                 for i, tf in enumerate(test_files, start=1):
                     st.write(f"Processing: {tf.name}")
@@ -358,7 +376,7 @@ if st.button("Start Analysis", type="primary", key="start_analysis_v2"):
                         stl_scale_to_mm,
                         use_global_registration,
                         voxel_size_global_used,
-                        icp_threshold,
+                        icp_threshold_used,
                         icp_max_iter,
                         True,
                         include_notimportant_metrics,
@@ -436,10 +454,13 @@ if st.button("Start Analysis", type="primary", key="start_analysis_v2"):
                         )
                         st.plotly_chart(overlay, width='stretch')
 
-                        # Report auto voxel sizes used
-                        if auto_voxels:
+                        # Report auto voxel sizes used and adaptive ICP
+                        if auto_voxels or processing_mode == "Adaptive":
                             st.caption(
-                                f"Auto voxel sizes: global {voxel_size_global_used:.2f} mm, volume {volume_voxel_used:.2f} mm"
+                                (
+                                    (f"Auto voxel sizes: global {voxel_size_global_used:.2f} mm, volume {volume_voxel_used:.2f} mm. " if auto_voxels else "") +
+                                    (f"Adaptive ICP threshold: {icp_threshold_used:.2f} mm" if processing_mode == "Adaptive" else "")
+                                )
                             )
 
                         # Use the exact points used to compute metrics to avoid length mismatch
