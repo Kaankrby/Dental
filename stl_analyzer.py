@@ -172,7 +172,7 @@ with st.sidebar:
             list(st.session_state.layer_weights.items()),
             columns=["Layer", "Weight"],
         )
-        edited_df = st.data_editor(weight_df, use_container_width=True, num_rows="dynamic")
+        edited_df = st.data_editor(weight_df, width='stretch', num_rows="dynamic")
         st.session_state.layer_weights = edited_df.set_index("Layer")["Weight"].to_dict()
     else:
         st.info("Upload a reference .3dm to populate layers.")
@@ -237,7 +237,7 @@ if ref_file:
                 "Weight": [st.session_state.layer_weights.get(layer.Name, 1.0) for layer in model_preview.Layers],
             }
         )
-        st.dataframe(layer_table, use_container_width=True)
+        st.dataframe(layer_table, width='stretch')
 
     # Initialize/augment layer weights from the uploaded reference so the sidebar updates
     try:
@@ -260,7 +260,7 @@ if ref_file:
         col1, col2 = st.columns([3, 1])
         with col1:
             plot = plot_rhino_model(model_preview)
-            st.plotly_chart(plot, use_container_width=True)
+            st.plotly_chart(plot, width='stretch')
         with col2:
             st.metric("Total Layers", len(layers))
             st.metric(
@@ -366,8 +366,8 @@ if st.button("Start Analysis", type="primary", key="start_analysis_v2"):
                             wdist = np.asarray(metrics["weighted_distances"]) 
                             fig1 = plot_deviation_histogram(dist, title="Raw Deviation Distribution")
                             fig2 = plot_deviation_histogram(wdist, title="Weighted Deviation Distribution")
-                            st.plotly_chart(fig1, use_container_width=True)
-                            st.plotly_chart(fig2, use_container_width=True)
+                            st.plotly_chart(fig1, width='stretch')
+                            st.plotly_chart(fig2, width='stretch')
 
                         # Deviation analysis
                         st.subheader("Deviation Analysis")
@@ -402,8 +402,8 @@ if st.button("Start Analysis", type="primary", key="start_analysis_v2"):
                                 eval_points, wdist, title="3D Heatmap: Weighted Deviations",
                                 point_size=point_size, color_scale=color_scale, colorbar_title="Weighted (mm)"
                             )
-                            st.plotly_chart(heat1, use_container_width=True)
-                            st.plotly_chart(heat2, use_container_width=True)
+                            st.plotly_chart(heat1, width='stretch')
+                            st.plotly_chart(heat2, width='stretch')
                         except Exception as _e:
                             st.warning("Unable to render 3D deviation heatmaps.")
 
@@ -411,7 +411,7 @@ if st.button("Start Analysis", type="primary", key="start_analysis_v2"):
                             [result["aligned_pcd"], analyzer.reference_pcd],
                             ["Aligned Test", "Reference"],
                         )
-                        st.plotly_chart(overlay, use_container_width=True)
+                        st.plotly_chart(overlay, width='stretch')
 
                         # Use the exact points used to compute metrics to avoid length mismatch
                         # (already computed above as eval_points)
