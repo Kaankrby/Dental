@@ -460,18 +460,27 @@ class RhinoAnalyzer:
 
         # Compute advanced metrics (raw)
         from utils import compute_advanced_metrics
-        # Metrics: include/exclude NOTIMPORTANT independently
-        aligned_pts = np.asarray(test_aligned.points)
-        nearest_layers = self._nearest_layers(aligned_pts) if len(aligned_pts) else np.array([], dtype=object)
-        if len(nearest_layers) and not include_notimportant_metrics:
-            eval_mask = (np.char.lower(nearest_layers.astype(str)) != 'notimportant') & (
-                np.array([float(self.layer_weights.get(ln, 1.0)) for ln in nearest_layers]) > 0
-            )
-            eval_pcd = test_aligned.select_by_index(np.nonzero(eval_mask)[0])
+        # Metrics evaluated on reference points so deviations follow reference geometry
+        ref_points = np.asarray(self.reference_pcd.points)
+        eval_indices = np.arange(len(ref_points))
+        if len(ref_points) and not include_notimportant_metrics and self._ref_point_layers is not None:
+            ref_layer_names = self._ref_point_layers.astype(str)
+            ref_weights = np.array([float(self.layer_weights.get(ln, 1.0)) for ln in ref_layer_names])
+            eval_mask = (np.char.lower(ref_layer_names) != 'notimportant') & (ref_weights > 0)
+            if np.any(eval_mask):
+                eval_indices = np.nonzero(eval_mask)[0]
+        if len(ref_points):
+            eval_points = ref_points[eval_indices]
+            eval_pcd = o3d.geometry.PointCloud()
+            eval_pcd.points = o3d.utility.Vector3dVector(eval_points)
+            if self.reference_pcd.has_normals():
+                ref_normals = np.asarray(self.reference_pcd.normals)
+                if len(ref_normals) == len(ref_points):
+                    eval_pcd.normals = o3d.utility.Vector3dVector(ref_normals[eval_indices])
         else:
-            eval_pcd = test_aligned
+            eval_pcd = self.reference_pcd
 
-        metrics = compute_advanced_metrics(eval_pcd, self.reference_pcd)
+        metrics = compute_advanced_metrics(eval_pcd, test_aligned)
         metrics.update({
             'fitness': icp_result.fitness,
             'inlier_rmse': icp_result.inlier_rmse,
