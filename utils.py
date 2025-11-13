@@ -326,3 +326,32 @@ def validate_stl_file(file_path: str):
     except Exception as e:
         st.error(f"STL Error: {str(e)}")
         return False
+
+def export_aligned_stl(stl_path: str, transformation: np.ndarray, scale_to_mm: float = 1.0) -> bytes:
+    """Return transformed STL bytes after scaling and alignment."""
+    mesh = o3d.io.read_triangle_mesh(stl_path)
+    if not mesh.has_vertices():
+        raise ValueError("STL has no vertices to export")
+
+    scale = float(scale_to_mm or 1.0)
+    if scale != 1.0:
+        mesh.scale(scale, center=[0.0, 0.0, 0.0])
+
+    if transformation is not None:
+        mesh.transform(np.asarray(transformation, dtype=np.float64))
+
+    with tempfile.NamedTemporaryFile(suffix=".stl", delete=False) as tmp:
+        tmp_path = tmp.name
+
+    success = o3d.io.write_triangle_mesh(tmp_path, mesh, write_ascii=False)
+    if not success:
+        os.unlink(tmp_path)
+        raise ValueError("Failed to serialize aligned STL")
+
+    try:
+        with open(tmp_path, "rb") as f:
+            data = f.read()
+    finally:
+        os.unlink(tmp_path)
+
+    return data

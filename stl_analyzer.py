@@ -26,6 +26,7 @@ from utils import (
     rhino_unit_name,
     estimate_point_spacing,
     default_layer_weight,
+    export_aligned_stl,
 )
 from streamlit.runtime.scriptrunner import get_script_run_ctx
 
@@ -482,6 +483,24 @@ if st.button("Start Analysis", type="primary", key="start_analysis_v2"):
                             f"results_{i}.csv",
                             "text/csv",
                         )
+
+                        # Export aligned STL for downstream workflows
+                        if metrics.get("transformation") is not None:
+                            try:
+                                aligned_bytes = export_aligned_stl(
+                                    test_path,
+                                    metrics["transformation"],
+                                    stl_scale_to_mm,
+                                )
+                                aligned_name = f"aligned_{os.path.splitext(tf.name)[0]}.stl"
+                                st.download_button(
+                                    f"Download Aligned STL - {tf.name}",
+                                    aligned_bytes,
+                                    aligned_name,
+                                    "application/sla",
+                                )
+                            except Exception as export_err:
+                                st.warning(f"Unable to generate aligned STL: {export_err}")
         except Exception as e:
             st.error(f"Analysis failed: {str(e)}")
             st.exception(e)
