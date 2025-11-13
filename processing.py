@@ -190,6 +190,7 @@ class RhinoAnalyzer:
         # Per-layer and per-point bookkeeping for 3DM
         self.reference_layers = {}  # layer_name -> np.ndarray[N,3]
         self._ref_point_layers = None  # np.ndarray[str] per point in reference_pcd
+        self._ref_point_weights = None  # np.ndarray[float] cached layer weights per point
         self._ref_kdtree = None
 
     @performance_monitor
@@ -261,6 +262,9 @@ class RhinoAnalyzer:
 
         # Build KDTree and per-point layer mapping
         self._ref_point_layers = sampled_layers
+        self._ref_point_weights = np.array(
+            [float(self.layer_weights.get(ln, 1.0)) for ln in sampled_layers], dtype=np.float64
+        ) if len(sampled_layers) else np.array([], dtype=np.float64)
         self._ref_kdtree = o3d.geometry.KDTreeFlann(self.reference_pcd)
 
         st.info(f"Loaded 3DM reference with {len(sampled_points)} points across {len(self.reference_layers)} layers")
@@ -332,6 +336,35 @@ class RhinoAnalyzer:
             raise ValueError("Distances and points length mismatch")
         lw = self._nearest_layer_weights(points)
         return distances * lw
+
+    def _reference_point_weights(self) -> np.ndarray:
+        """Return cached weights for each reference point."""
+        if self._ref_point_weights is not None and len(self._ref_point_weights):
+            return self._ref_point_weights
+        if self.reference_pcd is None:
+            return np.array([], dtype=np.float64)
+        if self._ref_point_layers is None:
+            self._ref_point_weights = np.ones(len(self.reference_pcd.points), dtype=np.float64)
+        else:
+            self._ref_point_weights = np.array(
+                [float(self.layer_weights.get(ln, 1.0)) for ln in self._ref_point_layers], dtype=np.float64
+            )
+        return self._ref_point_weights
+
+    def reference_point_layers(self) -> np.ndarray:
+        """Expose per-point layer labels for visualization."""
+        if self._ref_point_layers is None:
+            return np.array([], dtype=object)
+        return self._ref_point_layers
+
+    def reference_layer_mask(self, allowed_layers: list) -> np.ndarray:
+        """Boolean mask for reference points that match the allowed layer names."""
+        if self.reference_pcd is None:
+            return np.array([], dtype=bool)
+        if self._ref_point_layers is None or not allowed_layers:
+            return np.ones(len(self.reference_pcd.points), dtype=bool)
+        allowed = {str(ln).lower() for ln in allowed_layers}
+        return np.array([str(ln).lower() in allowed for ln in self._ref_point_layers], dtype=bool)
 
     def _nearest_layers(self, points: np.ndarray) -> np.ndarray:
         """Return nearest reference layer name for each point."""
@@ -463,13 +496,17 @@ class RhinoAnalyzer:
         # Metrics: include/exclude NOTIMPORTANT independently
         aligned_pts = np.asarray(test_aligned.points)
         nearest_layers = self._nearest_layers(aligned_pts) if len(aligned_pts) else np.array([], dtype=object)
+        eval_layers = np.array([], dtype=object)
         if len(nearest_layers) and not include_notimportant_metrics:
             eval_mask = (np.char.lower(nearest_layers.astype(str)) != 'notimportant') & (
                 np.array([float(self.layer_weights.get(ln, 1.0)) for ln in nearest_layers]) > 0
             )
-            eval_pcd = test_aligned.select_by_index(np.nonzero(eval_mask)[0])
+            eval_idx = np.nonzero(eval_mask)[0]
+            eval_pcd = test_aligned.select_by_index(eval_idx)
+            eval_layers = nearest_layers[eval_idx]
         else:
             eval_pcd = test_aligned
+            eval_layers = nearest_layers
 
         metrics = compute_advanced_metrics(eval_pcd, self.reference_pcd)
         metrics.update({
@@ -477,6 +514,7 @@ class RhinoAnalyzer:
             'inlier_rmse': icp_result.inlier_rmse,
             'transformation': icp_result.transformation
         })
+        metrics['eval_layer_names'] = eval_layers.tolist() if len(eval_layers) else []
 
         # Compute layer-weighted deviations
         aligned_points = np.asarray(eval_pcd.points)
@@ -485,6 +523,23 @@ class RhinoAnalyzer:
         metrics['mean_weighted_deviation'] = float(np.mean(weighted_dists))
         metrics['max_weighted_deviation'] = float(np.max(weighted_dists))
         metrics['weighted_distances'] = weighted_dists
+
+        # Reference-centric deviations show missing anatomy on test
+        ref_metrics = compute_advanced_metrics(self.reference_pcd, eval_pcd)
+        ref_distances = ref_metrics.get('distances', np.array([]))
+        metrics['ref_distances'] = ref_distances
+        metrics['mean_ref_deviation'] = float(ref_metrics.get('mean_deviation', 0.0))
+        metrics['max_ref_deviation'] = float(ref_metrics.get('max_deviation', 0.0))
+        if len(ref_distances):
+            ref_weights = self._reference_point_weights()
+            ref_weighted = ref_distances * ref_weights
+            metrics['ref_weighted_distances'] = ref_weighted
+            metrics['mean_ref_weighted_deviation'] = float(np.mean(ref_weighted))
+            metrics['max_ref_weighted_deviation'] = float(np.max(ref_weighted))
+        else:
+            metrics['ref_weighted_distances'] = np.array([])
+            metrics['mean_ref_weighted_deviation'] = 0.0
+            metrics['max_ref_weighted_deviation'] = 0.0
 
         # Voxel-based volumetric overlap (approximate, works for open meshes)
         try:

@@ -1,4 +1,4 @@
-﻿import sys
+Ã¯Â»Â¿import sys
 if sys.version_info >= (3, 10):
     import collections.abc
     sys.modules['collections'].Mapping = collections.abc.Mapping
@@ -13,10 +13,8 @@ import rhino3dm as rh
 
 from processing import RhinoAnalyzer
 from visualization import (
-    plot_point_cloud_heatmap,
     plot_multiple_point_clouds,
-    plot_deviation_histogram,
-    plot_registration_result,
+    plot_deviation_distribution,
     plot_rhino_model,
 )
 from utils import (
@@ -36,13 +34,45 @@ st.set_page_config(
     page_title="Dental STL Analyzer Pro",
     layout="wide",
     initial_sidebar_state="expanded",
-    page_icon="ğŸ¦·",
+    page_icon="Ã„Å¸Ã…Â¸Ã‚Â¦Ã‚Â·",
 )
 
 # Initialize analyzer once per session
 ctx = get_script_run_ctx()
 if ctx and 'analyzer' not in st.session_state:
     st.session_state['analyzer'] = RhinoAnalyzer()
+if 'analyzer' not in st.session_state:
+    st.session_state['analyzer'] = RhinoAnalyzer()
+analyzer = st.session_state['analyzer']
+
+st.markdown(
+    """
+    <style>
+    .sticky-metrics {
+        position: sticky;
+        top: 0;
+        z-index: 50;
+        background-color: var(--background-color, #0e1117);
+        padding: 0.5rem 0.75rem;
+        border-bottom: 1px solid rgba(250, 250, 250, 0.1);
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+
+def _guidance(title: str, message: str) -> None:
+    """Utility to render inline help via popover or caption."""
+    pop = getattr(st, "popover", None)
+    if callable(pop):
+        with pop(title):
+            st.write(message)
+    else:
+        st.caption(f"{title}: {message}")
+
+
+LAYER_FOCUS_STATE_KEY = "layer_focus_selection"
 
 # ------------------
 # -------------------------------
@@ -77,12 +107,14 @@ with st.sidebar:
         value=processing_mode != "Speed",
         help="Use RANSAC-based global registration for initial alignment",
     )
+    _guidance("Global registration", "Use RANSAC when scans start far apart; disable for already aligned meshes to save time.")
 
     auto_voxels = st.checkbox(
         "Auto Voxel Sizes (recommended)",
         value=True,
         help="Automatically choose voxel sizes based on reference scale",
     )
+    _guidance("Auto voxel sizes", "Derive voxel scales from reference spacing to keep metrics consistent across jaw sizes.")
 
     voxel_size_global = st.slider(
         "Global Voxel Size (mm)",
@@ -117,17 +149,18 @@ with st.sidebar:
     icp_mode_label = st.selectbox(
         "ICP Mode",
         [
-            "Auto (plane→point fallback)",
+            "Auto (plane-to-point fallback)",
             "Point-to-Plane",
             "Point-to-Point",
         ],
         help="Choose the ICP error metric. Point-to-plane is often better for scans with normals.",
     )
     icp_mode = {
-        "Auto (plane→point fallback)": "auto",
+        "Auto (plane-to-point fallback)": "auto",
         "Point-to-Plane": "point_to_plane",
         "Point-to-Point": "point_to_point",
     }[icp_mode_label]
+    _guidance("ICP mode", "Point-to-plane converges faster with reliable normals; point-to-point is safer for noisy scans.")
 
     # Visualization
     st.subheader("Visualization")
@@ -140,6 +173,25 @@ with st.sidebar:
         value=0.2 if processing_mode == "Balanced" else 0.1 if processing_mode == "Precision" else 0.3,
         help="Threshold used to compute coverage within tolerance",
     )
+    st.subheader("Layer Focus")
+    layer_options = analyzer.get_reference_layers()
+    default_focus = [
+        ln for ln in layer_options if analyzer.layer_weights.get(ln, 1.0) > 0 and ln.lower() != "notimportant"
+    ]
+    if layer_options:
+        existing = st.session_state.get(LAYER_FOCUS_STATE_KEY, default_focus or layer_options)
+        sanitized = [ln for ln in existing if ln in layer_options] or (default_focus or layer_options)
+        st.session_state[LAYER_FOCUS_STATE_KEY] = sanitized
+        st.multiselect(
+            "Highlight Layers",
+            options=layer_options,
+            default=sanitized,
+            key=LAYER_FOCUS_STATE_KEY,
+            help="Filter deviation stats and visuals to the selected reference layers.",
+        )
+    else:
+        st.info("Upload a reference to focus on inner fissure layers.")
+        st.session_state[LAYER_FOCUS_STATE_KEY] = []
     
     # Units
     st.subheader("Units")
@@ -151,7 +203,7 @@ with st.sidebar:
             "Meters (m)",
             "Inches (in)",
             "Feet (ft)",
-            "Microns (µm)",
+            "Microns (um)",
         ],
         help="STL is unitless; choose how to interpret and convert to mm",
     )
@@ -161,7 +213,7 @@ with st.sidebar:
         "Meters (m)": 1000.0,
         "Inches (in)": 25.4,
         "Feet (ft)": 304.8,
-        "Microns (µm)": 0.001,
+        "Microns (um)": 0.001,
     }
     stl_scale_to_mm = float(stl_unit_scale_map.get(stl_units_label, 1.0))
     volume_voxel = st.slider(
@@ -196,8 +248,9 @@ with st.sidebar:
         st.info("Upload a reference .3dm to populate layers.")
 
     # Keep analyzer in sync
-    analyzer = st.session_state['analyzer']
     analyzer.layer_weights = st.session_state.layer_weights
+
+selected_layers = st.session_state.get(LAYER_FOCUS_STATE_KEY, [])
 
 # -------------------------------------------------
 # Main Interface
@@ -469,114 +522,247 @@ if st.button("Start Analysis", type="primary", key="start_analysis_v2"):
                     metrics = result["metrics"]
 
                     with st.expander(f"Results: {tf.name}", expanded=True):
-                        c1, c2 = st.columns(2)
-                        with c1:
+                        eval_points = np.asarray(result.get("eval_pcd", result["aligned_pcd"]).points)
+                        dist = np.asarray(metrics["distances"])
+                        wdist = np.asarray(metrics["weighted_distances"])
+                        ref_dist = np.asarray(metrics.get("ref_distances", []))
+                        ref_wdist = np.asarray(metrics.get("ref_weighted_distances", []))
+                        ref_points = np.asarray(analyzer.reference_pcd.points) if analyzer.reference_pcd else np.empty((0, 3))
+                        ref_layers = analyzer.reference_point_layers() if analyzer.reference_pcd else np.array([], dtype=object)
+                        eval_layers = np.asarray(metrics.get("eval_layer_names", []))
+
+                        base_frames = {
+                            "Reference -> Test": {
+                                "points": ref_points,
+                                "dist": ref_dist,
+                                "wdist": ref_wdist,
+                                "layers": ref_layers,
+                            },
+                            "Test -> Reference": {
+                                "points": eval_points,
+                                "dist": dist,
+                                "wdist": wdist,
+                                "layers": eval_layers,
+                            },
+                        }
+
+                        focus_lower = {str(ln).lower() for ln in selected_layers}
+
+                        def _filter_array(values: np.ndarray, mask: np.ndarray) -> np.ndarray:
+                            arr = np.asarray(values)
+                            if not len(arr) or not len(mask) or len(arr) != len(mask):
+                                return arr
+                            return arr[mask]
+
+                        def _apply_focus(mode: str, frame: dict) -> dict:
+                            points = frame["points"]
+                            layers = frame.get("layers", np.array([], dtype=object))
+                            mask = np.ones(len(points), dtype=bool) if len(points) else np.array([], dtype=bool)
+                            if selected_layers and len(points):
+                                if mode == "Reference -> Test" and analyzer.reference_pcd is not None:
+                                    mask = analyzer.reference_layer_mask(selected_layers)
+                                elif len(layers) == len(points):
+                                    layer_lower = np.char.lower(layers.astype(str))
+                                    mask = np.isin(layer_lower, list(focus_lower))
+                            filtered_layers = layers[mask] if len(layers) == len(mask) and len(mask) else layers
+                            layer_counts = {}
+                            if len(filtered_layers):
+                                uniques, counts = np.unique(filtered_layers, return_counts=True)
+                                layer_counts = dict(sorted(zip(uniques, counts), key=lambda x: -x[1]))
+                            return {
+                                "points": points[mask] if len(points) and len(mask) == len(points) else points,
+                                "dist": _filter_array(frame["dist"], mask),
+                                "wdist": _filter_array(frame["wdist"], mask),
+                                "layers": filtered_layers,
+                                "layer_counts": layer_counts,
+                            }
+
+                        def _stats(values: np.ndarray, weighted: np.ndarray) -> dict:
+                            stats = {
+                                "rms": 0.0,
+                                "rms_w": 0.0,
+                                "p95": 0.0,
+                                "p95_w": 0.0,
+                                "within": 0.0,
+                                "within_w": 0.0,
+                            }
+                            vals = np.asarray(values)
+                            wvals = np.asarray(weighted)
+                            if len(vals):
+                                stats["rms"] = float(np.sqrt(np.mean(vals**2)))
+                                stats["p95"] = float(np.percentile(vals, 95))
+                                stats["within"] = float(np.mean(vals <= deviation_tolerance) * 100.0)
+                            if len(wvals):
+                                stats["rms_w"] = float(np.sqrt(np.mean(wvals**2)))
+                                stats["p95_w"] = float(np.percentile(wvals, 95))
+                                stats["within_w"] = float(np.mean(wvals <= deviation_tolerance) * 100.0)
+                            return stats
+
+                        frames = {}
+                        for mode, frame in base_frames.items():
+                            filtered = _apply_focus(mode, frame)
+                            filtered["stats"] = _stats(filtered["dist"], filtered["wdist"])
+                            frames[mode] = filtered
+
+                        mode_key = f"deviation_mode_{i}"
+                        default_mode = "Reference -> Test"
+                        if mode_key not in st.session_state:
+                            st.session_state[mode_key] = default_mode
+                        active_mode = st.session_state.get(mode_key, default_mode)
+
+                        sticky = st.container()
+                        with sticky:
+                            st.markdown('<div class="sticky-metrics">', unsafe_allow_html=True)
+                            col_rms, col_p95, col_tol = st.columns(3)
+                            col_rms.metric("RMS Ref->Test", f"{frames['Reference -> Test']['stats']['rms']:.3f} mm")
+                            col_rms.metric("RMS Test->Ref", f"{frames['Test -> Reference']['stats']['rms']:.3f} mm")
+                            col_p95.metric("P95 Ref->Test", f"{frames['Reference -> Test']['stats']['p95']:.3f} mm")
+                            col_p95.metric("P95 Test->Ref", f"{frames['Test -> Reference']['stats']['p95']:.3f} mm")
+                            col_tol.metric(f"Within {deviation_tolerance:.2f} mm (Ref->Test)", f"{frames['Reference -> Test']['stats']['within']:.1f}%")
+                            col_tol.metric(f"Within {deviation_tolerance:.2f} mm (Test->Ref)", f"{frames['Test -> Reference']['stats']['within']:.1f}%")
+                            st.markdown("</div>", unsafe_allow_html=True)
+
+                        summary_tab, deviation_tab, volume_tab, export_tab = st.tabs(
+                            ["Summary", "Deviation", "Volumes", "Exports"]
+                        )
+
+                        with summary_tab:
                             st.subheader("Metrics Summary")
-                            st.metric("Mean Deviation", f"{metrics['mean_deviation']:.3f} mm")
-                            st.metric("Max Deviation", f"{metrics['max_deviation']:.3f} mm")
-                            st.metric("Mean Weighted", f"{metrics['mean_weighted_deviation']:.3f} mm")
-                            st.metric("Max Weighted", f"{metrics['max_weighted_deviation']:.3f} mm")
+                            sum_c1, sum_c2 = st.columns(2)
+                            with sum_c1:
+                                st.metric("Mean Deviation (Test->Ref)", f"{metrics['mean_deviation']:.3f} mm")
+                                st.metric("Max Deviation (Test->Ref)", f"{metrics['max_deviation']:.3f} mm")
+                                st.metric("Mean Weighted (Test->Ref)", f"{metrics['mean_weighted_deviation']:.3f} mm")
+                                st.metric("Max Weighted (Test->Ref)", f"{metrics['max_weighted_deviation']:.3f} mm")
+                            with sum_c2:
+                                st.metric("Mean Deviation (Ref->Test)", f"{metrics.get('mean_ref_deviation', 0.0):.3f} mm")
+                                st.metric("Max Deviation (Ref->Test)", f"{metrics.get('max_ref_deviation', 0.0):.3f} mm")
+                                st.metric("Mean Weighted (Ref->Test)", f"{metrics.get('mean_ref_weighted_deviation', 0.0):.3f} mm")
+                                st.metric("Max Weighted (Ref->Test)", f"{metrics.get('max_ref_weighted_deviation', 0.0):.3f} mm")
+
+                            snapshot = {
+                                "Processing mode": processing_mode,
+                                "Global registration": "On" if use_global_registration else "Off",
+                                "ICP mode": icp_mode_label,
+                                "ICP threshold used (mm)": f"{icp_threshold_used:.3f}",
+                                "ICP iterations": icp_max_iter,
+                                "Global voxel (mm)": f"{voxel_size_global_used:.2f}",
+                                "Volume voxel (mm)": f"{volume_voxel_used:.2f}",
+                                "Fitness": f"{metrics.get('fitness', 0.0):.3f}",
+                                "Inlier RMSE": f"{metrics.get('inlier_rmse', 0.0):.3f}",
+                            }
+                            st.markdown("**Last Run Snapshot**")
+                            snapshot_df = pd.DataFrame(list(snapshot.items()), columns=["Parameter", "Value"])
+                            st.table(snapshot_df)
+
+                        with deviation_tab:
+                            st.subheader("Deviation Analysis")
+                            active_mode = st.radio(
+                                "Visualization frame",
+                                list(frames.keys()),
+                                key=mode_key,
+                                horizontal=True,
+                                help="Switch between seeing deviations anchored on the reference surface or the aligned test scan.",
+                            )
+                            active_frame = frames[active_mode]
+                            if len(active_frame["dist"]):
+                                dist_fig = plot_deviation_distribution(
+                                    active_frame["dist"],
+                                    active_frame["wdist"],
+                                    title=f"{active_mode} Distribution",
+                                    layer_counts=active_frame["layer_counts"],
+                                )
+                                st.plotly_chart(dist_fig, use_container_width=True)
+                                try:
+                                    from visualization import plot_point_cloud_by_values
+
+                                    heat_raw = plot_point_cloud_by_values(
+                                        active_frame["points"],
+                                        active_frame["dist"],
+                                        title=f"3D Heatmap: {active_mode} (raw)",
+                                        point_size=point_size,
+                                        color_scale=color_scale,
+                                        colorbar_title="Deviation (mm)",
+                                    )
+                                    st.plotly_chart(heat_raw, use_container_width=True)
+                                    if len(active_frame["wdist"]):
+                                        heat_weighted = plot_point_cloud_by_values(
+                                            active_frame["points"],
+                                            active_frame["wdist"],
+                                            title=f"3D Heatmap: {active_mode} (weighted)",
+                                            point_size=point_size,
+                                            color_scale=color_scale,
+                                            colorbar_title="Weighted (mm)",
+                                        )
+                                        st.plotly_chart(heat_weighted, use_container_width=True)
+                                except Exception:
+                                    st.warning("Unable to render 3D deviation heatmaps.")
+                            else:
+                                st.warning("No points available with the current layer filter for this frame.")
+
+                            overlay = plot_multiple_point_clouds(
+                                [result["aligned_pcd"], analyzer.reference_pcd],
+                                ["Aligned Test", "Reference"],
+                            )
+                            st.plotly_chart(overlay, use_container_width=True)
+
+                            if auto_voxels or processing_mode == "Adaptive":
+                                st.caption(
+                                    (
+                                        (f"Auto voxel sizes: global {voxel_size_global_used:.2f} mm, volume {volume_voxel_used:.2f} mm. " if auto_voxels else "")
+                                        + (f"Adaptive ICP threshold: {icp_threshold_used:.2f} mm" if processing_mode == "Adaptive" else "")
+                                    )
+                                )
+
+                        with volume_tab:
+                            st.subheader("Volume & Coverage")
                             if 'volume_intersection_vox' in metrics:
-                                st.metric("Overlap (Jaccard)", f"{metrics['volume_overlap_jaccard']*100:.1f}%")
-                                st.metric("Intersect Volume", f"{metrics['volume_intersection_vox']:.3f} mm^3")
-                                ref_gap = metrics.get("volume_ref_gap_vox")
-                                if ref_gap is not None:
-                                    st.metric("Reference Difference Volume", f"{ref_gap:.3f} mm^3")
-                                st.metric("Overlap vs Ref", f"{metrics['coverage_ref_pct']:.1f}%")
-                                st.metric("Overlap vs Test", f"{metrics['coverage_test_pct']:.1f}%")
+                                v1, v2, v3 = st.columns(3)
+                                with v1:
+                                    st.metric("Overlap (Jaccard)", f"{metrics['volume_overlap_jaccard']*100:.1f}%")
+                                    st.metric("Intersect Volume", f"{metrics['volume_intersection_vox']:.3f} mm^3")
+                                with v2:
+                                    st.metric("Overlap vs Ref", f"{metrics['coverage_ref_pct']:.1f}%")
+                                    st.metric("Overlap vs Test", f"{metrics['coverage_test_pct']:.1f}%")
+                                with v3:
+                                    ref_gap = metrics.get("volume_ref_gap_vox")
+                                    if ref_gap is not None:
+                                        st.metric("Reference Difference Volume", f"{ref_gap:.3f} mm^3")
+                                    test_gap = metrics.get("volume_test_gap_vox")
+                                    if test_gap is not None:
+                                        st.metric("Test Difference Volume", f"{test_gap:.3f} mm^3")
                             else:
                                 st.metric("Volume Similarity", f"{metrics['volume_similarity']*100:.1f}%")
 
-                        with c2:
-                            dist = np.asarray(metrics["distances"]) 
-                            wdist = np.asarray(metrics["weighted_distances"]) 
-                            fig1 = plot_deviation_histogram(dist, title="Raw Deviation Distribution")
-                            fig2 = plot_deviation_histogram(wdist, title="Weighted Deviation Distribution")
-                            st.plotly_chart(fig1, width='stretch')
-                            st.plotly_chart(fig2, width='stretch')
-
-                        # Deviation analysis
-                        st.subheader("Deviation Analysis")
-                        eval_points = np.asarray(result.get("eval_pcd", result["aligned_pcd"]).points)
-                        # Stats
-                        rms = float(np.sqrt(np.mean(dist**2))) if len(dist) else 0.0
-                        rms_w = float(np.sqrt(np.mean(wdist**2))) if len(wdist) else 0.0
-                        p95 = float(np.percentile(dist, 95)) if len(dist) else 0.0
-                        p95_w = float(np.percentile(wdist, 95)) if len(wdist) else 0.0
-                        within = float(np.mean(dist <= deviation_tolerance) * 100.0) if len(dist) else 0.0
-                        within_w = float(np.mean(wdist <= deviation_tolerance) * 100.0) if len(wdist) else 0.0
-
-                        c3, c4, c5 = st.columns(3)
-                        with c3:
-                            st.metric("RMS Deviation", f"{rms:.3f} mm")
-                            st.metric("RMS Weighted", f"{rms_w:.3f} mm")
-                        with c4:
-                            st.metric("P95 Deviation", f"{p95:.3f} mm")
-                            st.metric("P95 Weighted", f"{p95_w:.3f} mm")
-                        with c5:
-                            st.metric(f"Within {deviation_tolerance:.2f} mm", f"{within:.1f}%")
-                            st.metric(f"Within {deviation_tolerance:.2f} mm (Weighted)", f"{within_w:.1f}%")
-
-                        # 3D heatmaps of deviations
-                        try:
-                            from visualization import plot_point_cloud_by_values
-                            heat1 = plot_point_cloud_by_values(
-                                eval_points, dist, title="3D Heatmap: Raw Deviations",
-                                point_size=point_size, color_scale=color_scale, colorbar_title="Deviation (mm)"
-                            )
-                            heat2 = plot_point_cloud_by_values(
-                                eval_points, wdist, title="3D Heatmap: Weighted Deviations",
-                                point_size=point_size, color_scale=color_scale, colorbar_title="Weighted (mm)"
-                            )
-                            st.plotly_chart(heat1, width='stretch')
-                            st.plotly_chart(heat2, width='stretch')
-                        except Exception as _e:
-                            st.warning("Unable to render 3D deviation heatmaps.")
-
-                        overlay = plot_multiple_point_clouds(
-                            [result["aligned_pcd"], analyzer.reference_pcd],
-                            ["Aligned Test", "Reference"],
-                        )
-                        st.plotly_chart(overlay, width='stretch')
-
-                        # Report auto voxel sizes used and adaptive ICP
-                        if auto_voxels or processing_mode == "Adaptive":
-                            st.caption(
-                                (
-                                    (f"Auto voxel sizes: global {voxel_size_global_used:.2f} mm, volume {volume_voxel_used:.2f} mm. " if auto_voxels else "") +
-                                    (f"Adaptive ICP threshold: {icp_threshold_used:.2f} mm" if processing_mode == "Adaptive" else "")
-                                )
-                            )
-
-                        # Use the exact points used to compute metrics to avoid length mismatch
-                        # (already computed above as eval_points)
-                        export_df = pd.DataFrame(
-                            np.column_stack((eval_points, dist, wdist)),
-                            columns=["X", "Y", "Z", "Deviation", "WeightedDeviation"],
-                        )
-                        st.download_button(
-                            f"Download Results (CSV) - {tf.name}",
-                            export_df.to_csv(index=False).encode("utf-8"),
-                            f"results_{i}.csv",
-                            "text/csv",
-                        )
-                        try:
-                            combined_bytes = export_combined_3dm(
-                                ref_path,
-                                test_path,
-                                metrics.get("transformation"),
-                                stl_scale_to_mm,
-                                tf.name,
+                        with export_tab:
+                            st.subheader("Exports")
+                            export_df = pd.DataFrame(
+                                np.column_stack((eval_points, dist, wdist)),
+                                columns=["X", "Y", "Z", "Deviation_TestToRef", "WeightedDeviation_TestToRef"],
                             )
                             st.download_button(
-                                f"Download Combined 3DM - {tf.name}",
-                                combined_bytes,
-                                f"comparison_{i}.3dm",
-                                "application/octet-stream",
-                                key=f"download_combined_{i}",
+                                f"Download Results (CSV) - {tf.name}",
+                                export_df.to_csv(index=False).encode("utf-8"),
+                                f"results_{i}.csv",
+                                "text/csv",
                             )
-                        except Exception as export_err:
-                            st.warning(f"3DM export unavailable: {export_err}")
+                            try:
+                                combined_bytes = export_combined_3dm(
+                                    ref_path,
+                                    test_path,
+                                    metrics.get("transformation"),
+                                    stl_scale_to_mm,
+                                    tf.name,
+                                )
+                                st.download_button(
+                                    f"Download Combined 3DM - {tf.name}",
+                                    combined_bytes,
+                                    f"comparison_{i}.3dm",
+                                    "application/octet-stream",
+                                    key=f"download_combined_{i}",
+                                )
+                            except Exception as export_err:
+                                st.warning(f"3DM export unavailable: {export_err}")
         except Exception as e:
             st.error(f"Analysis failed: {str(e)}")
             st.exception(e)

@@ -140,6 +140,73 @@ def plot_deviation_histogram(
     
     return fig
 
+def plot_deviation_distribution(
+    distances: np.ndarray,
+    weighted_distances: np.ndarray = None,
+    title: str = "Deviation Distribution",
+    percentiles: Tuple[int, ...] = (50, 95),
+    layer_counts: dict = None
+) -> go.Figure:
+    """Combined histogram with percentile markers and optional layer summary."""
+    dist = np.asarray(distances)
+    wdist = np.asarray(weighted_distances) if weighted_distances is not None else None
+    fig = go.Figure()
+
+    if len(dist):
+        fig.add_trace(go.Histogram(
+            x=dist,
+            nbinsx=60,
+            name="Raw deviation",
+            opacity=0.75
+        ))
+        for pct in percentiles:
+            try:
+                val = float(np.percentile(dist, pct))
+            except IndexError:
+                continue
+            fig.add_vline(
+                x=val,
+                line_width=1,
+                line_dash="dash",
+                line_color="#ff6d00",
+                annotation_text=f"P{pct}: {val:.3f} mm",
+                annotation_position="top right"
+            )
+
+    if wdist is not None and len(wdist):
+        fig.add_trace(go.Histogram(
+            x=wdist,
+            nbinsx=60,
+            name="Weighted deviation",
+            opacity=0.45
+        ))
+
+    fig.update_layout(
+        title=title,
+        xaxis_title="Deviation (mm)",
+        yaxis_title="Count",
+        barmode="overlay",
+        hovermode="x unified",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+    )
+
+    if layer_counts:
+        summary = "<br>".join(f"{layer}: {count}" for layer, count in layer_counts.items())
+        fig.add_annotation(
+            text=f"Layer focus<br>{summary}",
+            align="left",
+            showarrow=False,
+            xref="paper",
+            yref="paper",
+            x=1.02,
+            y=0.5,
+            bordercolor="#888",
+            borderwidth=1,
+            bgcolor="rgba(255,255,255,0.85)"
+        )
+
+    return fig
+
 def plot_registration_result(
     source: o3d.geometry.PointCloud,
     target: o3d.geometry.PointCloud,
