@@ -1,4 +1,4 @@
-Ã¯Â»Â¿import sys
+import sys
 if sys.version_info >= (3, 10):
     import collections.abc
     sys.modules['collections'].Mapping = collections.abc.Mapping
