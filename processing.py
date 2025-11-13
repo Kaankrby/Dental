@@ -498,6 +498,8 @@ class RhinoAnalyzer:
                 'volume_overlap_jaccard': vox.get('volume_overlap_jaccard', 0.0),
                 'coverage_ref_pct': vox.get('coverage_ref_pct', 0.0),
                 'coverage_test_pct': vox.get('coverage_test_pct', 0.0),
+                'volume_ref_gap_vox': vox.get('volume_ref_exclusive', 0.0),
+                'volume_test_gap_vox': vox.get('volume_test_exclusive', 0.0),
             })
             # Backwards-compatible override for similarity using Jaccard
             metrics['volume_similarity'] = float(metrics.get('volume_overlap_jaccard', 0.0))

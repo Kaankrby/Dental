@@ -250,6 +250,8 @@ def compute_voxel_overlap_metrics(
             'volume_overlap_jaccard': 0.0,
             'coverage_ref_pct': 0.0,
             'coverage_test_pct': 0.0,
+            'volume_ref_exclusive': 0.0,
+            'volume_test_exclusive': 0.0,
         }
 
     # Align voxel grid origins using global min bound so indices line up
@@ -275,6 +277,9 @@ def compute_voxel_overlap_metrics(
     vol_inter = len(inter) * v_unit
     vol_union = len(union) * v_unit
 
+    vol_ref_gap = max(vol_tgt - vol_inter, 0.0)
+    vol_test_gap = max(vol_src - vol_inter, 0.0)
+
     jacc = (len(inter) / len(union)) if len(union) else 0.0
     cov_src = (len(inter) / len(vox_src) * 100.0) if len(vox_src) else 0.0
     cov_tgt = (len(inter) / len(vox_tgt) * 100.0) if len(vox_tgt) else 0.0
@@ -287,6 +292,8 @@ def compute_voxel_overlap_metrics(
         'volume_overlap_jaccard': float(jacc),
         'coverage_ref_pct': float(cov_tgt),
         'coverage_test_pct': float(cov_src),
+        'volume_ref_exclusive': float(vol_ref_gap),
+        'volume_test_exclusive': float(vol_test_gap),
     }
 
 def validate_file_name(filename: str) -> bool:

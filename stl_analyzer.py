@@ -478,7 +478,10 @@ if st.button("Start Analysis", type="primary", key="start_analysis_v2"):
                             st.metric("Max Weighted", f"{metrics['max_weighted_deviation']:.3f} mm")
                             if 'volume_intersection_vox' in metrics:
                                 st.metric("Overlap (Jaccard)", f"{metrics['volume_overlap_jaccard']*100:.1f}%")
-                                st.metric("Intersect Volume", f"{metrics['volume_intersection_vox']:.3f} mm³")
+                                st.metric("Intersect Volume", f"{metrics['volume_intersection_vox']:.3f} mm^3")
+                                ref_gap = metrics.get("volume_ref_gap_vox")
+                                if ref_gap is not None:
+                                    st.metric("Reference Difference Volume", f"{ref_gap:.3f} mm^3")
                                 st.metric("Overlap vs Ref", f"{metrics['coverage_ref_pct']:.1f}%")
                                 st.metric("Overlap vs Test", f"{metrics['coverage_test_pct']:.1f}%")
                             else:
