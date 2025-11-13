@@ -312,6 +312,80 @@ def _populate_layer_weights_from_3dm(uploaded_ref_file):
     except Exception:
         pass
 
+def _o3d_mesh_to_rhino(stl_path: str, transformation: np.ndarray, stl_scale_to_mm: float) -> rh.Mesh:
+    mesh = o3d.io.read_triangle_mesh(stl_path)
+    if not mesh.has_triangles() or not mesh.has_vertices():
+        raise ValueError("Test STL has no mesh data to export")
+
+    vertices = np.asarray(mesh.vertices, dtype=np.float64)
+    faces = np.asarray(mesh.triangles, dtype=np.int32)
+    if len(vertices) == 0 or len(faces) == 0:
+        raise ValueError("Test STL has no valid triangles")
+
+    scale = float(stl_scale_to_mm or 1.0)
+    if scale != 1.0:
+        vertices = vertices * scale
+
+    transform = np.asarray(transformation, dtype=np.float64) if transformation is not None else np.eye(4)
+    if transform.shape != (4, 4):
+        raise ValueError("Invalid transformation matrix for export")
+    hom = np.hstack([vertices, np.ones((vertices.shape[0], 1))])
+    vertices = (hom @ transform.T)[:, :3]
+
+    rh_mesh = rh.Mesh()
+    for v in vertices:
+        rh_mesh.Vertices.Add(float(v[0]), float(v[1]), float(v[2]))
+    for tri in faces:
+        rh_mesh.Faces.AddFace(int(tri[0]), int(tri[1]), int(tri[2]))
+    rh_mesh.Normals.ComputeNormals()
+    rh_mesh.Compact()
+    return rh_mesh
+
+def export_combined_3dm(reference_path: str, test_stl_path: str, transformation: np.ndarray, stl_scale_to_mm: float, test_name: str) -> bytes:
+    reference_model = rh.File3dm.Read(reference_path)
+    if reference_model is None:
+        raise ValueError("Unable to read reference .3dm for export")
+
+    combined = rh.File3dm()
+    combined.Settings.ModelUnitSystem = reference_model.Settings.ModelUnitSystem
+
+    ref_layer = rh.Layer()
+    ref_layer.Name = "Reference"
+    ref_layer_index = combined.Layers.Add(ref_layer)
+
+    test_layer = rh.Layer()
+    safe_name = "".join(ch if ch.isalnum() or ch in (" ", "-", "_") else "_" for ch in str(test_name or "Test"))
+    test_layer.Name = f"Aligned - {safe_name}".strip()
+    test_layer_index = combined.Layers.Add(test_layer)
+
+    ref_mesh_count = 0
+    for obj in reference_model.Objects:
+        geom = obj.Geometry
+        if isinstance(geom, rh.Mesh):
+            attrs = rh.ObjectAttributes()
+            attrs.LayerIndex = ref_layer_index
+            combined.Objects.AddMesh(geom, attrs)
+            ref_mesh_count += 1
+    if ref_mesh_count == 0:
+        raise ValueError("Reference file does not contain mesh objects to export")
+
+    aligned_mesh = _o3d_mesh_to_rhino(test_stl_path, transformation, stl_scale_to_mm)
+    attrs = rh.ObjectAttributes()
+    attrs.LayerIndex = test_layer_index
+    combined.Objects.AddMesh(aligned_mesh, attrs)
+
+    with tempfile.NamedTemporaryFile(suffix=".3dm", delete=False) as tmp:
+        tmp_path = tmp.name
+    try:
+        if not combined.Write(tmp_path, 7):
+            raise ValueError("Failed to serialize combined .3dm")
+        with open(tmp_path, "rb") as f:
+            data = f.read()
+    finally:
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+    return data
+
 if st.button("Start Analysis", type="primary", key="start_analysis_v2"):
     if not ref_file:
         st.error("Please upload a reference .3dm file!")
@@ -483,6 +557,23 @@ if st.button("Start Analysis", type="primary", key="start_analysis_v2"):
                             f"results_{i}.csv",
                             "text/csv",
                         )
+                        try:
+                            combined_bytes = export_combined_3dm(
+                                ref_path,
+                                test_path,
+                                metrics.get("transformation"),
+                                stl_scale_to_mm,
+                                tf.name,
+                            )
+                            st.download_button(
+                                f"Download Combined 3DM - {tf.name}",
+                                combined_bytes,
+                                f"comparison_{i}.3dm",
+                                "application/octet-stream",
+                                key=f"download_combined_{i}",
+                            )
+                        except Exception as export_err:
+                            st.warning(f"3DM export unavailable: {export_err}")
         except Exception as e:
             st.error(f"Analysis failed: {str(e)}")
             st.exception(e)
