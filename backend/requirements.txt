@@ -1,0 +1,11 @@
+fastapi>=0.100.0
+uvicorn>=0.23.0
+celery>=5.3.0
+redis>=5.0.0
+python-multipart>=0.0.6
+pydantic-settings>=2.0.0
+open3d>=0.17.0
+numpy>=1.24.0
+pandas>=2.0.0
+scipy>=1.10.0
+rhino3dm>=8.0.0
