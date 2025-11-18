@@ -16,16 +16,13 @@ Dental STL Analyzer Pro is a Streamlit application for comparing dental scans ag
 
 ### Prerequisites
 
-- Python 3.8+
+- Python 3.11+
 - Recommended OS: Ubuntu/Debian (for easier Open3D dependencies)
 
 ```bash
-sudo apt-get install -y \
-  libgl1-mesa-glx \
-  libglib2.0-0 \
-  libsm6 \
-  libxext6 \
-  libxrender1
+# On Debian/Ubuntu, these packages are required for Open3D.
+# If you use the Dev Container, these are installed automatically.
+sudo apt-get install -y libgl1-mesa-glx libglib2.0-0 libsm6 libxext6 libxrender1
 ```
 
 ### Install & Run
