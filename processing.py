@@ -192,6 +192,12 @@ class RhinoAnalyzer:
         self._ref_point_layers = None  # np.ndarray[str] per point in reference_pcd
         self._ref_point_weights = None  # np.ndarray[float] cached layer weights per point
         self._ref_kdtree = None
+        
+        # Caching for global registration
+        self._cached_global_ref = None
+        self._cached_global_fpfh = None
+        self._cached_global_voxel_size = None
+        self._cached_use_full_ref = None
 
     @performance_monitor
     def load_reference_3dm(self, file_path: str, layer_weights: dict, max_points: int = 100000):
@@ -394,8 +400,6 @@ class RhinoAnalyzer:
             out.estimate_normals()
         return out
 
-    # Do not filter target for alignment prior to an initial transform; mapping is unreliable pre-align.
-
     @performance_monitor
     def add_test_file(self, file_path: str, num_points: int, nb_neighbors: int, std_ratio: float):
         """For API compatibility. No internal storage needed for multi-file pipeline."""
@@ -434,17 +438,35 @@ class RhinoAnalyzer:
             # Downsample + FPFH
             source_down = self.target_pcd.voxel_down_sample(voxel_size=max(voxel_size, 1e-3))
             source_down.estimate_normals()
+            
+            # Check cache for reference features
             ref_for_global = self.reference_pcd if use_full_ref_global else ref_for_align
-            target_down = ref_for_global.voxel_down_sample(voxel_size=max(voxel_size, 1e-3))
-            target_down.estimate_normals()
+            
+            if (self._cached_global_ref is None or 
+                self._cached_global_voxel_size != voxel_size or 
+                self._cached_use_full_ref != use_full_ref_global):
+                
+                target_down = ref_for_global.voxel_down_sample(voxel_size=max(voxel_size, 1e-3))
+                target_down.estimate_normals()
+                target_fpfh = o3d.pipelines.registration.compute_fpfh_feature(
+                    target_down,
+                    o3d.geometry.KDTreeSearchParamHybrid(radius=5.0*voxel_size, max_nn=100)
+                )
+                
+                # Update cache
+                self._cached_global_ref = target_down
+                self._cached_global_fpfh = target_fpfh
+                self._cached_global_voxel_size = voxel_size
+                self._cached_use_full_ref = use_full_ref_global
+            else:
+                target_down = self._cached_global_ref
+                target_fpfh = self._cached_global_fpfh
+
             source_fpfh = o3d.pipelines.registration.compute_fpfh_feature(
                 source_down,
                 o3d.geometry.KDTreeSearchParamHybrid(radius=5.0*voxel_size, max_nn=100)
             )
-            target_fpfh = o3d.pipelines.registration.compute_fpfh_feature(
-                target_down,
-                o3d.geometry.KDTreeSearchParamHybrid(radius=5.0*voxel_size, max_nn=100)
-            )
+            
             result_init = o3d.pipelines.registration.registration_ransac_based_on_feature_matching(
                 source_down, target_down,
                 source_fpfh, target_fpfh,
@@ -462,15 +484,15 @@ class RhinoAnalyzer:
 
         # ICP refinement
         # Choose estimation based on icp_mode
-            def _run_icp(estimation):
-                return o3d.pipelines.registration.registration_icp(
-                    self.target_pcd,
-                    ref_for_align,
-                    icp_threshold,
-                    transform_init,
-                    estimation,
-                    o3d.pipelines.registration.ICPConvergenceCriteria(max_iteration=max_iter)
-                )
+        def _run_icp(estimation):
+            return o3d.pipelines.registration.registration_icp(
+                self.target_pcd,
+                ref_for_align,
+                icp_threshold,
+                transform_init,
+                estimation,
+                o3d.pipelines.registration.ICPConvergenceCriteria(max_iteration=max_iter)
+            )
 
         if icp_mode == 'point_to_point':
             icp_result = _run_icp(o3d.pipelines.registration.TransformationEstimationPointToPoint())

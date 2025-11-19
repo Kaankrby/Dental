@@ -76,7 +76,7 @@ def _guidance(title: str, message: str) -> None:
 
 LAYER_FOCUS_STATE_KEY = "layer_focus_selection"
 COMPARATOR_MODES = ("Legacy (Test anchored)", "Dual Reference/Test")
-DEFAULT_COMPARATOR_MODE = COMPARATOR_MODES[0]
+DEFAULT_COMPARATOR_MODE = COMPARATOR_MODES[1]
 ANALYSIS_RESULTS_KEY = "analysis_payloads"
 
 if ANALYSIS_RESULTS_KEY not in st.session_state:
@@ -484,386 +484,6 @@ def render_analysis_entries(
 # ------------------
 # -------------------------------
 # Sidebar Controls
-# -------------------------------------------------
-with st.sidebar:
-    st.header("Analysis Parameters")
-
-    # Processing modes
-    processing_mode = st.radio(
-        "Processing Mode",
-        ["Balanced", "Precision", "Speed", "Adaptive"],
-        help="Predefined parameter sets. Adaptive auto-tunes ICP threshold from model scale.",
-    )
-
-    # Point Cloud Generation
-    st.subheader("Point Cloud")
-    num_points = st.slider(
-        "Sample Points",
-        1000,
-        100000,
-        value=(
-            20000 if processing_mode == "Adaptive" else 15000 if processing_mode == "Balanced" else 30000 if processing_mode == "Precision" else 5000
-        ),
-        help="Number of points to sample from the reference .3dm",
-    )
-
-    # Registration Parameters
-    st.subheader("Registration")
-    use_global_registration = st.checkbox(
-        "Enable Global Registration",
-        value=processing_mode != "Speed",
-        help="Use RANSAC-based global registration for initial alignment",
-    )
-    _guidance("Global registration", "Use RANSAC when scans start far apart; disable for already aligned meshes to save time.")
-
-    auto_voxels = st.checkbox(
-        "Auto Voxel Sizes (recommended)",
-        value=True,
-        help="Automatically choose voxel sizes based on reference scale",
-    )
-    _guidance("Auto voxel sizes", "Derive voxel scales from reference spacing to keep metrics consistent across jaw sizes.")
-
-    voxel_size_global = st.slider(
-        "Global Voxel Size (mm)",
-        0.1,
-        5.0,
-        value=1.5 if processing_mode == "Balanced" else 0.5 if processing_mode == "Precision" else 3.0,
-        disabled=(not use_global_registration) or auto_voxels,
-    )
-
-    use_full_ref_global = st.checkbox(
-        "Use full reference for global registration",
-        value=False,
-        help="RANSAC uses the entire reference point cloud instead of filtered important layers.",
-    )
-
-    st.subheader("ICP Parameters")
-    icp_threshold = st.slider(
-        "ICP Threshold (mm)",
-        0.01,
-        2.0,
-        value=(0.25 if processing_mode == "Adaptive" else 0.3 if processing_mode == "Balanced" else 0.1 if processing_mode == "Precision" else 0.5),
-        disabled=(processing_mode == "Adaptive"),
-    )
-
-    icp_max_iter = st.slider(
-        "ICP Max Iterations",
-        10,
-        2000,
-        value=200 if processing_mode == "Balanced" else 500 if processing_mode == "Precision" else 100,
-    )
-
-    icp_mode_label = st.selectbox(
-        "ICP Mode",
-        [
-            "Auto (plane-to-point fallback)",
-            "Point-to-Plane",
-            "Point-to-Point",
-        ],
-        help="Choose the ICP error metric. Point-to-plane is often better for scans with normals.",
-    )
-    icp_mode = {
-        "Auto (plane-to-point fallback)": "auto",
-        "Point-to-Plane": "point_to_plane",
-        "Point-to-Point": "point_to_point",
-    }[icp_mode_label]
-    _guidance("ICP mode", "Point-to-plane converges faster with reliable normals; point-to-point is safer for noisy scans.")
-
-    # Visualization
-    st.subheader("Visualization")
-    point_size = st.slider("Point Size", 1, 10, 3)
-    color_scale = st.selectbox("Color Scale", ["viridis", "plasma", "turbo", "hot"])
-    deviation_tolerance = st.slider(
-        "Deviation Tolerance (mm)",
-        0.01,
-        2.0,
-        value=0.2 if processing_mode == "Balanced" else 0.1 if processing_mode == "Precision" else 0.3,
-        help="Threshold used to compute coverage within tolerance",
-    )
-    st.subheader("Layer Focus")
-    layer_options = analyzer.get_reference_layers()
-    default_focus = [
-        ln for ln in layer_options if analyzer.layer_weights.get(ln, 1.0) > 0 and ln.lower() != "notimportant"
-    ]
-    if layer_options:
-        existing = st.session_state.get(LAYER_FOCUS_STATE_KEY, default_focus or layer_options)
-        sanitized = [ln for ln in existing if ln in layer_options] or (default_focus or layer_options)
-        st.session_state[LAYER_FOCUS_STATE_KEY] = sanitized
-        st.multiselect(
-            "Highlight Layers",
-            options=layer_options,
-            default=sanitized,
-            key=LAYER_FOCUS_STATE_KEY,
-            help="Filter deviation stats and visuals to the selected reference layers.",
-        )
-    else:
-        st.info("Upload a reference to focus on inner fissure layers.")
-        st.session_state[LAYER_FOCUS_STATE_KEY] = []
-
-    st.subheader("Comparator Mode")
-    comparator_options = ["Legacy (Test anchored)", "Dual Reference/Test"]
-    comparator_default = st.session_state.get("comparator_mode", comparator_options[0])
-    comparator_mode = st.radio(
-        "Comparison View",
-        comparator_options,
-        index=comparator_options.index(comparator_default) if comparator_default in comparator_options else 0,
-        help="Switch between the original test-anchored comparator and the new dual reference/test analysis.",
-    )
-    st.session_state["comparator_mode"] = comparator_mode
-    
-    # Units
-    st.subheader("Units")
-    stl_units_label = st.selectbox(
-        "Test STL Units",
-        [
-            "Millimeters (mm)",
-            "Centimeters (cm)",
-            "Meters (m)",
-            "Inches (in)",
-            "Feet (ft)",
-            "Microns (um)",
-        ],
-        help="STL is unitless; choose how to interpret and convert to mm",
-    )
-    stl_unit_scale_map = {
-        "Millimeters (mm)": 1.0,
-        "Centimeters (cm)": 10.0,
-        "Meters (m)": 1000.0,
-        "Inches (in)": 25.4,
-        "Feet (ft)": 304.8,
-        "Microns (um)": 0.001,
-    }
-    stl_scale_to_mm = float(stl_unit_scale_map.get(stl_units_label, 1.0))
-    volume_voxel = st.slider(
-        "Volume Voxel Size (mm)",
-        0.05,
-        2.0,
-        value=0.5 if processing_mode == "Balanced" else 0.25 if processing_mode == "Precision" else 1.0,
-        help="Voxel size for approximate volume overlap on open meshes",
-        disabled=auto_voxels,
-    )
-
-    # Metrics inclusion toggle for NOTIMPORTANT
-    include_notimportant_metrics = st.checkbox(
-        "Include NOTIMPORTANT in metrics",
-        value=False,
-        help="Controls only metrics; alignment always focuses on important layers."
-    )
-
-    # Layer weights editor
-    if 'layer_weights' not in st.session_state:
-        st.session_state.layer_weights = {}
-
-    st.subheader("Layer Weights")
-    if st.session_state.layer_weights:
-        weight_df = pd.DataFrame(
-            list(st.session_state.layer_weights.items()),
-            columns=["Layer", "Weight"],
-        )
-        edited_df = st.data_editor(weight_df, width='stretch', num_rows="dynamic")
-        st.session_state.layer_weights = edited_df.set_index("Layer")["Weight"].to_dict()
-    else:
-        st.info("Upload a reference .3dm to populate layers.")
-
-# Keep analyzer in sync
-analyzer.layer_weights = st.session_state.layer_weights
-
-selected_layers = st.session_state.get(LAYER_FOCUS_STATE_KEY, [])
-comparator_mode = st.session_state.get("comparator_mode", DEFAULT_COMPARATOR_MODE)
-use_legacy_view = comparator_mode == DEFAULT_COMPARATOR_MODE
-
-# -------------------------------------------------
-# Main Interface
-# -------------------------------------------------
-st.title("Dental STL Analyzer Pro")
-st.markdown(
-    """
-    Compare dental scan STL files against a layered Rhino (.3dm) reference with weighted deviations and visualizations.
-    """
-)
-
-# File Upload Sections
-with st.expander("Upload Files", expanded=True):
-    col1, col2 = st.columns(2)
-
-    with col1:
-        st.subheader("Reference 3DM")
-        ref_file = st.file_uploader(
-            "Upload Reference .3dm",
-            type=["3dm"],
-            help="Rhino file with layered meshes",
-        )
-
-    with col2:
-        st.subheader("Test STL(s)")
-        test_files = st.file_uploader(
-            "Upload Test STL(s)",
-            type=["stl"],
-            accept_multiple_files=True,
-            help="One or more STL scans to analyze against reference",
-        )
-
-# After file upload but before processing
-if ref_file:
-    st.subheader("Reference File Preview")
-    # Save and load temporary file
-    ref_path_preview = save_uploaded_file(ref_file)
-    model_preview = rh.File3dm.Read(ref_path_preview)
-    try:
-        units_name = rhino_unit_name(model_preview.Settings.ModelUnitSystem)
-        st.info(f"Reference units: {units_name} (converted to mm for analysis)")
-    except Exception:
-        st.info("Reference units: Millimeters (assumed)")
-
-    # Layer overview
-    with st.expander("Layer Summary"):
-        layers = {layer.Name: layer for layer in model_preview.Layers}
-        layer_table = pd.DataFrame.from_dict(
-            {
-                "Layer": [layer.Name for layer in model_preview.Layers],
-                "Object Count": [
-                    sum(1 for obj in model_preview.Objects if obj.Attributes.LayerIndex == layer.Index)
-                    for layer in model_preview.Layers
-                ],
-                "Weight": [st.session_state.layer_weights.get(layer.Name, 1.0) for layer in model_preview.Layers],
-            }
-        )
-        st.dataframe(layer_table, width='stretch')
-
-    # Initialize/augment layer weights from the uploaded reference so the sidebar updates
-    try:
-        current = st.session_state.get("layer_weights", {})
-        for layer in model_preview.Layers:
-            if layer.Name not in current:
-                current[layer.Name] = default_layer_weight(layer.Name)
-        st.session_state.layer_weights = current
-        st.session_state['analyzer'].layer_weights = current
-        # Trigger a rerun once on new upload so sidebar reflects weights immediately
-        last_name = st.session_state.get("_last_ref_name")
-        if last_name != getattr(ref_file, "name", None):
-            st.session_state["_last_ref_name"] = getattr(ref_file, "name", None)
-            st.experimental_rerun()
-    except Exception:
-        pass
-
-    # 3D Preview
-    with st.expander("3D Preview"):
-        col1, col2 = st.columns([3, 1])
-        with col1:
-            plot = plot_rhino_model(model_preview)
-            st.plotly_chart(plot, width='stretch')
-        with col2:
-            st.metric("Total Layers", len(layers))
-            st.metric(
-                "Total Meshes",
-                sum(1 for obj in model_preview.Objects if isinstance(obj.Geometry, rh.Mesh)),
-            )
-            st.metric(
-                "Total Vertices",
-                sum(
-                    len(obj.Geometry.Vertices)
-                    for obj in model_preview.Objects
-                    if isinstance(obj.Geometry, rh.Mesh)
-                ),
-            )
-
-# -------------------------------------------------
-# New Analysis (3DM reference + multi STL)
-# -------------------------------------------------
-def _populate_layer_weights_from_3dm(uploaded_ref_file):
-    try:
-        tmp = save_uploaded_file(uploaded_ref_file)
-        model = rh.File3dm.Read(tmp)
-        layer_names = [layer.Name for layer in model.Layers]
-        if layer_names:
-            current = st.session_state.get("layer_weights", {})
-            for ln in layer_names:
-                if ln not in current:
-                    current[ln] = default_layer_weight(ln)
-            st.session_state.layer_weights = current
-            st.session_state['analyzer'].layer_weights = current
-    except Exception:
-        pass
-
-def _o3d_mesh_to_rhino(stl_path: str, transformation: np.ndarray, stl_scale_to_mm: float) -> rh.Mesh:
-    mesh = o3d.io.read_triangle_mesh(stl_path)
-    if not mesh.has_triangles() or not mesh.has_vertices():
-        raise ValueError("Test STL has no mesh data to export")
-
-    vertices = np.asarray(mesh.vertices, dtype=np.float64)
-    faces = np.asarray(mesh.triangles, dtype=np.int32)
-    if len(vertices) == 0 or len(faces) == 0:
-        raise ValueError("Test STL has no valid triangles")
-
-    scale = float(stl_scale_to_mm or 1.0)
-    if scale != 1.0:
-        vertices = vertices * scale
-
-    transform = np.asarray(transformation, dtype=np.float64) if transformation is not None else np.eye(4)
-    if transform.shape != (4, 4):
-        raise ValueError("Invalid transformation matrix for export")
-    hom = np.hstack([vertices, np.ones((vertices.shape[0], 1))])
-    vertices = (hom @ transform.T)[:, :3]
-
-    rh_mesh = rh.Mesh()
-    for v in vertices:
-        rh_mesh.Vertices.Add(float(v[0]), float(v[1]), float(v[2]))
-    for tri in faces:
-        rh_mesh.Faces.AddFace(int(tri[0]), int(tri[1]), int(tri[2]))
-    rh_mesh.Normals.ComputeNormals()
-    rh_mesh.Compact()
-    return rh_mesh
-
-def export_combined_3dm(reference_path: str, test_stl_path: str, transformation: np.ndarray, stl_scale_to_mm: float, test_name: str) -> bytes:
-    reference_model = rh.File3dm.Read(reference_path)
-    if reference_model is None:
-        raise ValueError("Unable to read reference .3dm for export")
-
-    combined = rh.File3dm()
-    combined.Settings.ModelUnitSystem = reference_model.Settings.ModelUnitSystem
-
-    ref_layer = rh.Layer()
-    ref_layer.Name = "Reference"
-    ref_layer_index = combined.Layers.Add(ref_layer)
-
-    test_layer = rh.Layer()
-    safe_name = "".join(ch if ch.isalnum() or ch in (" ", "-", "_") else "_" for ch in str(test_name or "Test"))
-    test_layer.Name = f"Aligned - {safe_name}".strip()
-    test_layer_index = combined.Layers.Add(test_layer)
-
-    ref_mesh_count = 0
-    for obj in reference_model.Objects:
-        geom = obj.Geometry
-        if isinstance(geom, rh.Mesh):
-            attrs = rh.ObjectAttributes()
-            attrs.LayerIndex = ref_layer_index
-            combined.Objects.AddMesh(geom, attrs)
-            ref_mesh_count += 1
-    if ref_mesh_count == 0:
-        raise ValueError("Reference file does not contain mesh objects to export")
-
-    aligned_mesh = _o3d_mesh_to_rhino(test_stl_path, transformation, stl_scale_to_mm)
-    attrs = rh.ObjectAttributes()
-    attrs.LayerIndex = test_layer_index
-    combined.Objects.AddMesh(aligned_mesh, attrs)
-
-    with tempfile.NamedTemporaryFile(suffix=".3dm", delete=False) as tmp:
-        tmp_path = tmp.name
-    try:
-        if not combined.Write(tmp_path, 7):
-            raise ValueError("Failed to serialize combined .3dm")
-        with open(tmp_path, "rb") as f:
-            data = f.read()
-    finally:
-        if os.path.exists(tmp_path):
-            os.unlink(tmp_path)
-    return data
-
-if st.button("Start Analysis", type="primary", key="start_analysis_v2"):
-    if not ref_file:
-        st.error("Please upload a reference .3dm file!")
-    elif not test_files:
-        st.error("Please upload at least one test STL file!")
     else:
         try:
             analyzer = st.session_state['analyzer']
@@ -918,75 +538,84 @@ if st.button("Start Analysis", type="primary", key="start_analysis_v2"):
                     icp_threshold_used = icp_threshold
 
                 session_entries = []
+                progress_bar = st.progress(0)
+                total_files = len(test_files)
+                
                 for i, tf in enumerate(test_files, start=1):
-                    st.write(f"Processing: {tf.name}")
-                    test_path = os.path.join(temp_dir, f"test_{i}.stl")
-                    with open(test_path, "wb") as f:
-                        f.write(tf.getbuffer())
-                    if not validate_stl_file(test_path):
-                        continue
-
-                    result = analyzer.process_test_file(
-                        test_path,
-                        stl_scale_to_mm,
-                        use_global_registration,
-                        voxel_size_global_used,
-                        icp_threshold_used,
-                        icp_max_iter,
-                        True,
-                        include_notimportant_metrics,
-                        use_full_ref_global,
-                        icp_mode,
-                        volume_voxel_used,
-                    )
-                    metrics = result["metrics"]
-                    eval_pcd_obj = result.get("eval_pcd", result["aligned_pcd"])
-                    eval_points = np.asarray(eval_pcd_obj.points)
-                    dist = np.asarray(metrics["distances"])
-                    wdist = np.asarray(metrics["weighted_distances"])
-                    ref_dist = np.asarray(metrics.get("ref_distances", []))
-                    ref_wdist = np.asarray(metrics.get("ref_weighted_distances", []))
-                    eval_layers = np.asarray(metrics.get("eval_layer_names", []))
-                    aligned_points = np.asarray(result["aligned_pcd"].points)
-
-                    combined_bytes = None
-                    combined_error = None
                     try:
-                        combined_bytes = export_combined_3dm(
-                            ref_path,
-                            test_path,
-                            metrics.get("transformation"),
-                            stl_scale_to_mm,
-                            tf.name,
-                        )
-                    except Exception as export_err:
-                        combined_error = str(export_err)
+                        st.write(f"Processing: {tf.name}")
+                        test_path = os.path.join(temp_dir, f"test_{i}.stl")
+                        with open(test_path, "wb") as f:
+                            f.write(tf.getbuffer())
+                        if not validate_stl_file(test_path):
+                            continue
 
-                    session_entries.append(
-                        {
-                            "name": tf.name,
-                            "metrics": metrics,
-                            "eval_points": eval_points,
-                            "dist": dist,
-                            "wdist": wdist,
-                            "ref_dist": ref_dist,
-                            "ref_wdist": ref_wdist,
-                            "eval_layers": eval_layers,
-                            "aligned_points": aligned_points,
-                            "combined_bytes": combined_bytes,
-                            "combined_error": combined_error,
-                            "run_params": {
-                                "processing_mode": processing_mode,
-                                "use_global_registration": use_global_registration,
-                                "icp_mode_label": icp_mode_label,
-                                "icp_threshold_used": icp_threshold_used,
-                                "icp_max_iter": icp_max_iter,
-                                "voxel_size_global_used": voxel_size_global_used,
-                                "volume_voxel_used": volume_voxel_used,
-                                "auto_voxels": auto_voxels,
-                            },
-                        }
-                    )
+                        result = analyzer.process_test_file(
+                            test_path,
+                            stl_scale_to_mm,
+                            use_global_registration,
+                            voxel_size_global_used,
+                            icp_threshold_used,
+                            icp_max_iter,
+                            True,
+                            include_notimportant_metrics,
+                            use_full_ref_global,
+                            icp_mode,
+                            volume_voxel_used,
+                        )
+                        metrics = result["metrics"]
+                        eval_pcd_obj = result.get("eval_pcd", result["aligned_pcd"])
+                        eval_points = np.asarray(eval_pcd_obj.points)
+                        dist = np.asarray(metrics["distances"])
+                        wdist = np.asarray(metrics["weighted_distances"])
+                        ref_dist = np.asarray(metrics.get("ref_distances", []))
+                        ref_wdist = np.asarray(metrics.get("ref_weighted_distances", []))
+                        eval_layers = np.asarray(metrics.get("eval_layer_names", []))
+                        aligned_points = np.asarray(result["aligned_pcd"].points)
+
+                        combined_bytes = None
+                        combined_error = None
+                        try:
+                            combined_bytes = export_combined_3dm(
+                                ref_path,
+                                test_path,
+                                metrics.get("transformation"),
+                                stl_scale_to_mm,
+                                tf.name,
+                            )
+                        except Exception as export_err:
+                            combined_error = str(export_err)
+
+                        session_entries.append(
+                            {
+                                "name": tf.name,
+                                "metrics": metrics,
+                                "eval_points": eval_points,
+                                "dist": dist,
+                                "wdist": wdist,
+                                "ref_dist": ref_dist,
+                                "ref_wdist": ref_wdist,
+                                "eval_layers": eval_layers,
+                                "aligned_points": aligned_points,
+                                "combined_bytes": combined_bytes,
+                                "combined_error": combined_error,
+                                "run_params": {
+                                    "processing_mode": processing_mode,
+                                    "use_global_registration": use_global_registration,
+                                    "icp_mode_label": icp_mode_label,
+                                    "icp_threshold_used": icp_threshold_used,
+                                    "icp_max_iter": icp_max_iter,
+                                    "voxel_size_global_used": voxel_size_global_used,
+                                    "volume_voxel_used": volume_voxel_used,
+                                    "auto_voxels": auto_voxels,
+                                },
+                            }
+                        )
+                    except Exception as file_err:
+                        st.error(f"Error processing {tf.name}: {str(file_err)}")
+                        continue
+                    finally:
+                        progress_bar.progress(i / total_files)
 
                 if session_entries:
                     st.session_state[ANALYSIS_RESULTS_KEY] = session_entries
